@@ -28,7 +28,7 @@ const http = require('http');
 const dns = require('dns').promises;
 const { createNode } = require('./lib/node');
 const { createStore } = require('./lib/store');
-const { createMesh, isPrivateAddress, isLoopback } = require('./lib/mesh');
+const { createMesh, isPrivateAddress, isLoopback, isLan } = require('./lib/mesh');
 const beat = require('./lib/beat');
 const work = require('./lib/work');
 // The MCP surface. server.js advertised /mcp and /.well-known/mcp.json for weeks while BOTH returned
@@ -78,12 +78,12 @@ async function fetchDiscoveryCard(url, doFetch, opts = {}) {
   const host = u.hostname.replace(/^\[|\]$/g, '');
   // The loopback escape must reach here too: classifyUrl may have admitted 127.0.0.1 in development,
   // and re-refusing it at the socket would leave the mesh unusable locally for no security gain.
-  const localOk = opts.allowLoopback === true && isLoopback(host);
-  if (!localOk) {
+  const lanOk = (a) => (opts.allowLoopback === true && isLoopback(a)) || (opts.allowPrivate === true && isLan(a));
+  if (!lanOk(host)) {
     if (isPrivateAddress(host)) throw new Error('private address refused');
     const resolved = await dns.lookup(host, { all: true });
     for (const r of resolved) {
-      if (isPrivateAddress(r.address)) throw new Error('host resolves inward (' + r.address + ') — refused');
+      if (isPrivateAddress(r.address) && !lanOk(r.address)) throw new Error('host resolves inward (' + r.address + ') — refused');
     }
   }
   const res = await doFetch(u.origin + '/.well-known/lawbor.json', {
@@ -104,6 +104,9 @@ function build(deps = {}) {
   const self = deps.self || SELF;
   // Development escape: loopback ONLY (never the rest of the private space — see lib/mesh.js).
   const allowLoopback = deps.allowLoopback !== undefined ? deps.allowLoopback : process.env.LAWBOR_ALLOW_LOOPBACK === '1';
+  // LAN testing across two machines: RFC1918 addresses (192.168.x, 10.x). Cloud metadata (169.254)
+  // stays refused even here — see isLan. Dev/test only, never production.
+  const allowPrivate = deps.allowPrivate !== undefined ? deps.allowPrivate : process.env.LAWBOR_ALLOW_PRIVATE === '1';
   const allowInsecure = deps.allowInsecure !== undefined ? deps.allowInsecure : process.env.LAWBOR_ALLOW_INSECURE === '1';
 
   /* ONE peerbook. This used to be a bare `new Map()` here PLUS a Set inside relay.js, and the two
@@ -113,10 +116,10 @@ function build(deps = {}) {
   const mesh = deps.mesh || createMesh({
     self,
     preflight: deps.preflight || mainstreetPreflight,
-    verify: deps.verify || ((url) => fetchDiscoveryCard(url, doFetch, { allowLoopback })),
+    verify: deps.verify || ((url) => fetchDiscoveryCard(url, doFetch, { allowLoopback, allowPrivate })),
     minScore: deps.minScore || MIN_SCORE,
     anchors: parseAnchors(process.env.LAWBOR_ANCHORS),
-    allowInsecure, allowLoopback,
+    allowInsecure, allowLoopback, allowPrivate,
   });
 
   const send = async (toAddr, env) => {                 // transport: POST the envelope to the peer's accept url

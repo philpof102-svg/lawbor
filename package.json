@@ -23,6 +23,7 @@
     "README.md",
     "WORKFLOW.md",
     "DESKTOP.md",
+    "CONNECTING.md",
     "SECURITY.md",
     ".claude-plugin/"
   ],
@@ -33,7 +34,8 @@
     "mcp": "node bin/lawbor-mcp.js",
     "desktop": "electron desktop/main.cjs",
     "sim": "node sim/interaction.js",
-    "fuzz": "node sim/fuzz.js"
+    "fuzz": "node sim/fuzz.js",
+    "oracle": "node sim/oracle.js"
   },
   "keywords": [
     "mcp",

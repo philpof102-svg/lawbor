@@ -420,7 +420,16 @@ async function seedPeers(mesh, from, to, opts) {
     }
   });
 
-  await t('isPrivateAddress agrees with classifyUrl — the transport hook cannot fail open', () => {
+  await 
+t('allowPrivate opens RFC1918 LAN for cross-machine testing — but NEVER cloud metadata', () => {
+  const lan = { allowInsecure: true, allowPrivate: true };
+  assert.equal(classifyUrl('http://192.168.1.42:4830/', lan).ok, true, 'a LAN peer is reachable in LAN-test mode');
+  assert.equal(classifyUrl('http://10.0.0.5:4830/', lan).ok, true, '10/8 too');
+  assert.equal(classifyUrl('http://169.254.169.254/', lan).ok, false, 'cloud metadata STAYS refused even in LAN mode');
+  assert.equal(classifyUrl('http://192.168.1.42:4830/', { allowInsecure: true }).ok, false, 'without allowPrivate, LAN is refused (default SSRF protection)');
+});
+
+t('isPrivateAddress agrees with classifyUrl — the transport hook cannot fail open', () => {
     for (const ip of ['::ffff:7f00:1', '0:0:0:0:0:0:7f00:1', '::127.0.0.1', '64:ff9b::127.0.0.1', '2002:7f00:1::', 'fec0::1']) {
       assert.equal(isPrivateAddress(ip), true, ip + ' must be private to the exported predicate too');
     }
