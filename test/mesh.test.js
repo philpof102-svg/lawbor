@@ -270,7 +270,7 @@ async function seedPeers(mesh, from, to, opts) {
     const anchors = anchorIdx.map((i) => ({ addr: addrOf(i), url: register(i) }));
     const m = mk({ anchors, maxPeers: 64 });
     const gossiped = await seedPeers(m, 910, 930, { source: 'gossip', learnedFrom: addrOf(900) });   // 20
-    const operator = await seedPeers(m, 940, 957, {});                                                // 17
+    const operator = await seedPeers(m, 940, 957, { source: 'operator' });                                                // 17
     assert.equal(m.addrs().length, 40);
     const s = m.sample(3);
     assert.ok(s.length <= 3 && s.length > 0);
@@ -285,7 +285,7 @@ async function seedPeers(mesh, from, to, opts) {
 
   await t('sample: two consecutive calls with the injected rng return different subsets', async () => {
     const m = mk({ maxPeers: 64 });
-    await seedPeers(m, 1_000_000, 1_000_030, {});
+    await seedPeers(m, 1_000_000, 1_000_030, { source: 'operator' });
     let differed = false;
     for (let i = 0; i < 20 && !differed; i++) {
       const a = JSON.stringify(m.sample(3).map((e) => e.addr).sort());
@@ -349,6 +349,82 @@ async function seedPeers(mesh, from, to, opts) {
     assert.equal(/require\s*\(/.test(src), false, 'mesh.js must import NOTHING — no token module, no transport');
     for (const g of ['XMLHttpRequest', 'WebSocket', 'setInterval', 'setTimeout', 'process.env'])
       assert.equal(src.includes(g), false, 'mesh.js must not reference ' + g + ' (no timers, no ambient config)');
+  });
+
+  /* ============================================================================================
+   * ADVERSARIAL REGRESSIONS — every case below was a CONFIRMED bypass, demonstrated by three
+   * independent skeptics running code against the first version of this file (2026-07-18).
+   * The common root of the two critical ones: the guards ran BEFORE an await, so concurrent
+   * callers all saw the same pre-await state. Slots are now reserved synchronously.
+   * ========================================================================================== */
+  const PEER = '0x' + 'be'.repeat(20);
+  const okPre = async () => ({ decision: 'PROCEED', score: 90 });
+  const addrN = (i) => '0x' + String(i).padStart(2, '0').repeat(20);
+
+  await t('TOCTOU: 20 concurrent admissions cannot overrun a maxPeers:2 book', async () => {
+    const m = createMesh({ self: SELF, maxPeers: 2, preflight: okPre,
+      verify: async (u) => ({ addr: '0x' + u.match(/p([0-9a-f]{40})/)[1] }) });
+    await Promise.all(Array.from({ length: 20 }, (_, i) => addrN(i + 10))
+      .map((a) => m.addPeer(a, 'https://h.example/p' + a.slice(2), { source: 'gossip' })));
+    assert.equal(m.addrs().length, 2, 'the never-evict cap holds under concurrency');
+  });
+
+  await t('TOCTOU: a concurrent gossip rebind cannot displace an operator binding', async () => {
+    const m = createMesh({ self: SELF, maxPeers: 8, preflight: okPre, verify: async () => ({ addr: PEER }) });
+    await Promise.all([
+      m.addPeer(PEER, 'https://honest.example/x', { source: 'operator' }),
+      m.addPeer(PEER, 'https://attacker.example/x', { source: 'gossip' }),
+    ]);
+    assert.equal(m.urlFor(PEER), 'https://honest.example/x', 'first write wins even interleaved');
+  });
+
+  await t('a reservation is not routable until verify + preflight have both passed', async () => {
+    let release; const held = new Promise((r) => { release = r; });
+    const m = createMesh({ self: SELF, preflight: okPre, verify: async () => { await held; return { addr: PEER }; } });
+    const inflight = m.addPeer(PEER, 'https://slow.example/x', { source: 'operator' });
+    assert.deepEqual(m.addrs(), [], 'an unverified peer is never advertised');
+    assert.equal(m.urlFor(PEER), undefined, 'and never resolvable by the transport');
+    release(); await inflight;
+    assert.deepEqual(m.addrs(), [PEER.toLowerCase()], 'and appears once verified');
+  });
+
+  await t('a failed operator rebind RESTORES the previous binding instead of destroying it', async () => {
+    let calls = 0;
+    const m = createMesh({ self: SELF, preflight: okPre,
+      verify: async () => { calls++; if (calls > 1) throw new Error('unreachable'); return { addr: PEER }; } });
+    await m.addPeer(PEER, 'https://good.example/x', { source: 'operator' });
+    const r = await m.addPeer(PEER, 'https://new.example/x', { source: 'operator', confirm: true });
+    assert.equal(r.ok, false);
+    assert.equal(m.urlFor(PEER), 'https://good.example/x', 'a working peer survives a failed rebind');
+  });
+
+  await t('opts.source defaults to the UNPRIVILEGED value — an omitted source is gossip, not operator', async () => {
+    const m = createMesh({ self: SELF, preflight: okPre, verify: async () => ({ addr: PEER }) });
+    await m.addPeer(PEER, 'https://x.example/a');
+    assert.deepEqual(m.sample(3), [], 'a source-less peer is not laundered onward as ours');
+  });
+
+  await t('SSRF: every form the panel got through is now refused', () => {
+    const bypasses = [
+      'https://localhost./x',              // trailing dot defeated the $ anchor
+      'https://[::ffff:7f00:1]/x',          // IPv4-mapped, hextet form
+      'https://[0:0:0:0:0:0:7f00:1]/x',     // fully expanded loopback
+      'https://[::127.0.0.1]/x',            // IPv4-compatible
+      'https://[64:ff9b::127.0.0.1]/x',     // NAT64
+      'https://[2002:7f00:1::]/x',          // 6to4
+      'https://[fec0::1]/x',                // site-local
+    ];
+    for (const u of bypasses) {
+      const c = classifyUrl(u);
+      assert.equal(c.ok, false, u + ' must be refused');
+    }
+  });
+
+  await t('isPrivateAddress agrees with classifyUrl — the transport hook cannot fail open', () => {
+    for (const ip of ['::ffff:7f00:1', '0:0:0:0:0:0:7f00:1', '::127.0.0.1', '64:ff9b::127.0.0.1', '2002:7f00:1::', 'fec0::1']) {
+      assert.equal(isPrivateAddress(ip), true, ip + ' must be private to the exported predicate too');
+    }
+    assert.equal(isPrivateAddress('2606:4700::1111'), false, 'a real public v6 address still passes');
   });
 
   console.log(`\n${pass} passed · ${fail} failed`);

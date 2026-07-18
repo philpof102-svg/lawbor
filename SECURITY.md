@@ -57,6 +57,39 @@ createRelay({
 `bodyHash` in the payload is **sha256, not keccak256** (no keccak in node, zero dependencies). A
 verifier must hash exactly as `signablePayload()` does or every signature will fail.
 
+## Fixed 2026-07-18 — mesh.js concurrency and SSRF (found before it was ever wired)
+
+`lib/mesh.js` was reviewed by three independent adversarial agents immediately after it was
+written. All three returned *fix-first*. The important class was **TOCTOU**: `addPeer()` checked its
+guards, then `await`ed `verify()` and `preflight()`, then wrote. Concurrent callers — and `offer()`
+ingests candidates concurrently — all saw the same pre-await state, so **both** headline defences
+were void: 20 peers were driven into a `maxPeers: 2` book, and an operator binding was rebound to an
+attacker URL without any `confirm`.
+
+Fixed by reserving the slot **synchronously**, before the first `await`. A reservation occupies its
+slot (so the cap and first-write-wins are atomic on the single-threaded loop) but is not routable:
+`addrs()`, `urlFor()`, `sample()` and `selectTargets()` all skip pending entries until `verify()`
+and the reputation gate have passed. A failed operator rebind restores the previous binding instead
+of destroying it.
+
+Also fixed: `opts.source` defaulted to the **privileged** value, so an omitted source minted an
+unprunable, gossip-launderable peer — it now defaults to `gossip`. And these confirmed SSRF
+bypasses, which passed both `classifyUrl()` and the exported `isPrivateAddress()`:
+`localhost.` (a trailing dot made the `$` anchor miss), `::ffff:7f00:1`, fully expanded
+`0:0:0:0:0:0:7f00:1`, `::127.0.0.1`, NAT64 `64:ff9b::`, 6to4 `2002::`, and site-local `fec0::/10`.
+
+Nothing was exposed in the meantime: `lib/mesh.js` is not yet imported by any running path (see
+below). Pinned by 7 regression tests in `test/mesh.test.js`.
+
+## Not yet wired — mesh.js is inert
+
+`server.js` still keeps its own `const peers = new Map()` and `POST /peers` still calls the ungated
+`relay.addPeer`. So today the peer layer's checks protect nothing in the running node, and
+`selectTargets()`'s fan-out cap does not exist in the live path. Wiring it (relay taking
+`peers: () => mesh.addrs()`, the transport resolving through `mesh.urlFor()`, and both branches of
+`relay.accept/originate` routing through `selectTargets`) is the next change. Until then, treat
+`lib/mesh.js` as reviewed-but-unused code, not as an active defence.
+
 ## Known limits — not fixed, stated plainly
 
 - **Not sybil-resistant.** A peer slot costs one address scoring ≥ `minScore`. Signature
