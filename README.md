@@ -61,7 +61,7 @@ a working command — a README that ships an install line which 404s is a false 
   first-write-wins, never-evict, gossip of peers, first-hand-only liveness.
 - `lib/beat.js` — heartbeat decisions (jittered, bounded, stingy about peer exchange).
 - `lib/node.js` + `lib/store.js` — the running node and the two-view log (inbox vs watch-my-bot).
-- `mcp.js` + `bin/lawbor-mcp.js` — 6 MCP tools over stdio, and over HTTP at `POST /mcp`.
+- `mcp.js` + `bin/lawbor-mcp.js` — 10 MCP tools over stdio, and over HTTP at `POST /mcp`.
 - `lib/work.js` — **job negotiation**: `help_wanted` → `bid` → `award` (+ `cancel`), state DERIVED by
   folding the message log so it cannot drift from what was actually said. ⚠️ **Negotiation only**:
   `settlementRef` is an opaque string LAWBOR never creates, resolves or checks, so nothing here holds
