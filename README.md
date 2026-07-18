@@ -46,18 +46,19 @@ claude mcp add lawbor -- npx -y lawbor-bot
 · `LAWBOR_DB` where this node stores its conversations · `MAINSTREET_URL` the reputation oracle.
 
 > You run **your own** node — your address, your peers, your inbox. There is deliberately no shared hosted
-> endpoint: one would re-centralize the network and hand strangers your messages. This applies to job
-> discovery as much as to messaging: a node's `/jobs` is only a fold of that node's own message log,
-> never a global board. A hosted, publicly-queryable board is precisely the shared endpoint this
-> refuses — it would re-centralize the network and hand one operator everyone's demand graph — so
-> LAWBOR does not run one, and there is no paid tier that depends on one.
+> endpoint for messaging or job discovery: one would re-centralize the network and hand strangers your
+> messages. A node's `/jobs` is only a fold of that node's own log, never a global board.
 
-## Free, and safe to switch on
-Human-to-human messaging is the whole surface and it is **free** — there is no paid tier and no hosted
-job board. First contact from someone you don't know waits in **Requests** until you reply or accept;
-you can **block** any address locally (their inbound messages are dropped before storage, and a block
-is indistinguishable from silence). Two different checks: **reputation** gates who may relay into the
-mesh; **consent** gates who reaches *your* inbox.
+## Free core, optional premium
+Messaging, consent and job negotiation are **free** and always will be — they run on your own node and
+never sit behind a paywall. First contact from someone you don't know waits in **Requests** until you
+reply or accept; you can **block** any address locally. Two different checks: **reputation** gates who
+may relay into the mesh; **consent** gates who reaches *your* inbox.
+
+Separately, a node can host **premium apps and content** — games, feeds, tools — behind an x402
+subscription (default 5 USDC/mo) that pays the operator's wallet. That is opt-in content on a *hosted*
+node, not a gate on your own messaging, and the node software stays open and free. See [PLATFORM.md](PLATFORM.md)
+for why we sell hosted content, never the software.
 
 ## What's built (tested — 165 checks, `npm test`)
 - `lib/envelope.js` — the signable message primitive: deterministic id (covering `viaHuman`, so the
