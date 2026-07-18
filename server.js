@@ -18,6 +18,8 @@
  *                                        reputation gate, first-write-wins, cap (via lib/mesh.js)
  *   POST /lawbor/offer   {from, peers} → a peer offers us PEERS (bounded per source, gated per candidate)
  *   GET  /lawbor/peers                 → a BOUNDED sample of ours in return (never the full table)
+ *   POST /work           {to,kind,…}   → the three work verbs: help_wanted · bid · award · cancel
+ *   GET  /jobs                         → jobs DERIVED from the message log (no separate job table)
  *
  * 🛑 No keys, no autonomous send of money. Envelopes carry a descriptor to sign; the operator signs.
  *   Reputation gate + fail-closed live in the relay. MainStreet preflight is the injectable oracle.
@@ -28,6 +30,7 @@ const { createNode } = require('./lib/node');
 const { createStore } = require('./lib/store');
 const { createMesh, isPrivateAddress, isLoopback } = require('./lib/mesh');
 const beat = require('./lib/beat');
+const work = require('./lib/work');
 // The MCP surface. server.js advertised /mcp and /.well-known/mcp.json for weeks while BOTH returned
 // 500 'mcpDispatch is not defined' — this module was never required. The suite missed it because
 // test/mcp.test.js imports ../mcp directly and never went through the HTTP server. A machine-readable
@@ -230,6 +233,31 @@ function build(deps = {}) {
 
       if (req.method === 'POST' && url === '/say') { const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.say(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason }); }
       if (req.method === 'POST' && url === '/bot/say') { const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.botSay(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, delivered: r.delivered }); }
+
+      /* WORK — the three verbs. State is DERIVED from the message log by folding it, so there is no
+       * job table to drift out of sync with what was actually said. The actor rules are checked HERE,
+       * before the envelope is built: a rule enforced only when rendering is decorative. */
+      if (req.method === 'POST' && url === '/work') {
+        const a = await body(req) || {};
+        if (!a.to || !a.kind) return json(res, 400, { error: 'to + kind required' });
+        const job = work.foldThread(store.all()).get(a.jobId);
+        const may = work.mayApply(job, a.kind, node.self);
+        if (!may.ok) return json(res, 409, { error: may.reason });
+        let wbody; try { wbody = work.buildWork(a.kind, a); } catch (e) { return json(res, 400, { error: e.message }); }
+        // `as` decides which of the two views this lands in: a person posting a job is 'human',
+        // a bot quoting autonomously is 'bot'. It is not cosmetic — it is the store view.
+        const r = a.as === 'human' ? await node.say(a.to, wbody, { thread: a.thread })
+                                   : await node.botSay(a.to, wbody, { thread: a.thread });
+        return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason || null });
+      }
+      if (req.method === 'GET' && url === '/jobs') {
+        const jobs = work.jobsFrom(store.all());
+        const state = q.get('state');
+        return json(res, 200, {
+          jobs: state ? jobs.filter((j) => j.state === state) : jobs,
+          note: 'negotiation only — settlementRef is opaque and never created, resolved or checked here',
+        });
+      }
 
       if (req.method === 'GET' && url === '/inbox') return json(res, 200, { view: 'inbox', threads: store.inbox(node.self, Number(q.get('limit')) || 50) });
       if (req.method === 'GET' && url === '/bot-activity') return json(res, 200, { view: 'bot-activity', threads: store.botActivity(node.self, Number(q.get('limit')) || 50) });

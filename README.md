@@ -50,7 +50,7 @@ a working command — a README that ships an install line which 404s is a false 
 > You run **your own** node — your address, your peers, your inbox. There is deliberately no shared hosted
 > endpoint: one would re-centralize the network and hand strangers your messages.
 
-## What's built (tested — 117 checks, `npm test`)
+## What's built (tested — 137 checks, `npm test`)
 - `lib/envelope.js` — the signable message primitive: deterministic id (covering `viaHuman`, so the
   human-vs-bot distinction cannot be forged in transit), EIP-712 `LawborMessage` descriptor
   (`signed:false`), exported `signablePayload()` so a RECEIVER can recompute the signed bytes.
@@ -62,6 +62,11 @@ a working command — a README that ships an install line which 404s is a false 
 - `lib/beat.js` — heartbeat decisions (jittered, bounded, stingy about peer exchange).
 - `lib/node.js` + `lib/store.js` — the running node and the two-view log (inbox vs watch-my-bot).
 - `mcp.js` + `bin/lawbor-mcp.js` — 6 MCP tools over stdio, and over HTTP at `POST /mcp`.
+- `lib/work.js` — **job negotiation**: `help_wanted` → `bid` → `award` (+ `cancel`), state DERIVED by
+  folding the message log so it cannot drift from what was actually said. ⚠️ **Negotiation only**:
+  `settlementRef` is an opaque string LAWBOR never creates, resolves or checks, so nothing here holds
+  funds, releases funds, or enforces delivery. After an award the two parties are exactly as exposed
+  to each other as before it. It is not a labour market, because no exchange occurs.
 - `desktop/` — the floating pod: collapse to a desktop object, click to reopen the messaging app.
 
 Known limits and the defects fixed along the way are written down in [SECURITY.md](SECURITY.md),

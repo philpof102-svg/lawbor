@@ -21,12 +21,23 @@ const payload = (r) => JSON.parse(r.result.content[0].text);
 (async () => {
   console.log('LAWBOR MCP — the gitlawb/openclaude tool surface:');
 
-  await t('initialize + tools/list expose the 6 lawbor tools on protocol ' + PROTOCOL, async () => {
+  await t('initialize + tools/list expose the 10 lawbor tools on protocol ' + PROTOCOL, async () => {
     const init = await dispatch({ jsonrpc: '2.0', id: 1, method: 'initialize' }, { node });
     assert.equal(init.result.protocolVersion, PROTOCOL); assert.equal(init.result.serverInfo.name, 'lawbor');
     const list = await dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, { node });
-    assert.equal(list.result.tools.length, 6);
-    assert.equal(list.result.tools.map((x) => x.name).sort().join(), 'lawbor_bot_say,lawbor_inbox,lawbor_say,lawbor_thread,lawbor_watch,lawbor_whoami');
+    assert.equal(list.result.tools.length, 10);
+    assert.equal(list.result.tools.map((x) => x.name).sort().join(),
+      'lawbor_award,lawbor_bid,lawbor_bot_say,lawbor_inbox,lawbor_jobs,lawbor_post_job,lawbor_say,lawbor_thread,lawbor_watch,lawbor_whoami');
+  });
+
+  await t('every WORK tool description states plainly that settlement is not included', async () => {
+    // An agent reads these descriptions and nothing else. If they imply payment, the tool lies to
+    // the only audience it has — which is precisely the anti-hype rule this project holds itself to.
+    const list = await dispatch({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { node });
+    for (const name of ['lawbor_jobs', 'lawbor_award']) {
+      const d = list.result.tools.find((x) => x.name === name).description;
+      assert.match(d, /NOT included|no funds are held|NEGOTIATION ONLY/i, name + ' must not imply payment');
+    }
   });
   await t('lawbor_whoami → identity + peers + the REAL reputation floor (no undefined)', async () => {
     const p = payload(await call('lawbor_whoami'));

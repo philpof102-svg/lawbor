@@ -9,11 +9,15 @@
  *   lawbor_inbox    → VIEW 1: the human's conversations (read-only)
  *   lawbor_watch    → VIEW 2: what this bot is autonomously discussing (read-only)
  *   lawbor_thread   → the messages of one thread (read-only)
+ *   lawbor_jobs / lawbor_post_job / lawbor_bid / lawbor_award → the three work verbs (NEGOTIATION ONLY:
+ *     no funds are held, released or enforced anywhere in LAWBOR — see lib/work.js)
  *
  * 🛑 No tool signs, sends funds, or bypasses the gate. lawbor_say/bot_say return `sign.signed:false` —
  *   the bot-operator's key signs. Inbound peer traffic is reputation-gated by the relay (fail-closed).
  *   The node is INJECTED (deps.node) so this file is transport/network-free and testable offline.
  */
+const work = require('./lib/work');
+
 const PROTOCOL = '2024-11-05';
 const SERVER = { name: 'lawbor', version: '0.1.0' };
 
@@ -24,6 +28,11 @@ const TOOLS = [
   { name: 'lawbor_inbox', description: 'READ-ONLY VIEW 1: the human\'s conversations (messages a person authored, either side). Input: limit?.', inputSchema: { type: 'object', properties: { limit: { type: 'integer' } }, additionalProperties: false } },
   { name: 'lawbor_watch', description: 'READ-ONLY VIEW 2: what this bot is autonomously discussing with other bots — the transparency feed. Input: limit?.', inputSchema: { type: 'object', properties: { limit: { type: 'integer' } }, additionalProperties: false } },
   { name: 'lawbor_thread', description: 'READ-ONLY: the full message list of one thread. Input: id (thread id).', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  // --- work: negotiation only. NOT settlement — see lib/work.js's header before describing these.
+  { name: 'lawbor_jobs', description: 'READ-ONLY: jobs derived from the message log — open / awarded / cancelled, with their bids. NEGOTIATION ONLY: no funds are held, released or enforced anywhere in LAWBOR. Input: state? (open|awarded|cancelled).', inputSchema: { type: 'object', properties: { state: { type: 'string' } }, additionalProperties: false } },
+  { name: 'lawbor_post_job', description: 'Post a job to a peer bot (help_wanted). You choose the jobId; use the same one in every copy you send. Input: to, jobId, task, tags?, budgetHint?, as? (human|bot, default bot).', inputSchema: { type: 'object', properties: { to: { type: 'string' }, jobId: { type: 'string' }, task: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, budgetHint: { type: 'string' }, as: { type: 'string' } }, required: ['to', 'jobId', 'task'] } },
+  { name: 'lawbor_bid', description: 'Answer a job with a price. One live bid per worker — bidding again REPLACES your previous bid. You cannot bid on your own job. Input: to (the requester), jobId, price, eta?, note?.', inputSchema: { type: 'object', properties: { to: { type: 'string' }, jobId: { type: 'string' }, price: { type: 'string' }, eta: { type: 'string' }, note: { type: 'string' } }, required: ['to', 'jobId', 'price'] } },
+  { name: 'lawbor_award', description: 'Award your job to one bidder. Only the requester may award, and the award restates the agreed price — that is the requester\'s signed commitment. Settlement is NOT included: settlementRef is an opaque string LAWBOR never creates or checks. Input: to (the winner), jobId, worker, price, eta?, settlementRef?.', inputSchema: { type: 'object', properties: { to: { type: 'string' }, jobId: { type: 'string' }, worker: { type: 'string' }, price: { type: 'string' }, eta: { type: 'string' }, settlementRef: { type: 'string' } }, required: ['to', 'jobId', 'worker', 'price'] } },
 ];
 
 /** @param {object} msg JSON-RPC · @param {{node:object}} deps the running LAWBOR node (lib/node.js) */
@@ -59,6 +68,20 @@ async function dispatch(msg, deps = {}) {
         } else if (name === 'lawbor_thread') {
           if (!a.id) return ok({ content: [{ type: 'text', text: 'tool error: id required' }], isError: true });
           payload = { thread: a.id, messages: node.store.thread(a.id) };
+        } else if (name === 'lawbor_jobs') {
+          const jobs = work.jobsFrom(node.store.all());
+          payload = { jobs: a.state ? jobs.filter((j) => j.state === a.state) : jobs,
+            note: 'negotiation only — nothing here holds, releases or enforces payment' };
+        } else if (name === 'lawbor_post_job' || name === 'lawbor_bid' || name === 'lawbor_award') {
+          const kind = name === 'lawbor_post_job' ? 'help_wanted' : name === 'lawbor_bid' ? 'bid' : 'award';
+          // Actor rules run BEFORE the envelope is built. Checking them only when rendering would
+          // make them decorative — the same mistake as the ungated POST /peers side-door.
+          const job = work.foldThread(node.store.all()).get(a.jobId);
+          const may = work.mayApply(job, kind, node.self);
+          if (!may.ok) return ok({ content: [{ type: 'text', text: 'refused: ' + may.reason }], isError: true });
+          const wbody = work.buildWork(kind, a);
+          const r = a.as === 'human' ? await node.say(a.to, wbody, {}) : await node.botSay(a.to, wbody, {});
+          payload = { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, reason: r.reason || null, sign: r.sign };
         } else return err(-32602, `unknown tool: ${name}`);
         return ok({ content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false });
       } catch (e) { return ok({ content: [{ type: 'text', text: `tool error: ${e.message}` }], isError: true }); }

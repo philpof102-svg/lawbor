@@ -64,6 +64,9 @@
   .bub[data-origin="bot"] .who { color: var(--bot); }
   .bub .body { white-space: pre-wrap; word-break: break-word; }
 
+  .row .note { color: var(--dim); font-size: 10px; margin-top: 3px; opacity: .75; }
+  .row[data-state="awarded"] .with::before { content: "✓ "; color: var(--bot); }
+  .row[data-state="cancelled"] { opacity: .5; }
   .empty, .err { padding: 16px 12px; color: var(--dim); font-size: 12px; }
   .err { color: #f0a; }
 
@@ -91,6 +94,7 @@
   <nav>
     <button id="tabInbox" aria-selected="true">inbox</button>
     <button id="tabBot" aria-selected="false">watch my bot</button>
+    <button id="tabJobs" aria-selected="false">jobs</button>
   </nav>
 
   <main id="main"><div class="empty">loading…</div></main>
@@ -123,7 +127,31 @@ function el(tag, cls, text) {
 function show(nodes) { main.replaceChildren(...nodes); }
 function fail(e) { show([el('div', 'err', String(e && e.message || e))]); }
 
+async function paintJobs() {
+  $('back').hidden = true; $('composer').hidden = true;
+  try {
+    const r = await L.jobs();
+    const now = Date.now();
+    const rows = (r.jobs || []).map((j) => L.view.jobRow(j, self, now));
+    updateBadge(rows.length);
+    if (!rows.length) return show([el('div', 'empty', 'no jobs yet. a job appears when a peer posts one, or when you do.')]);
+    show(rows.map((row) => {
+      const d = el('div', 'row');
+      d.dataset.state = row.state;
+      const top = el('div', 'top');
+      top.append(el('span', 'with', row.task), el('span', 'count', row.state), el('span', 'when', row.when));
+      // The second line never says "paid" or "done" — an award is an agreement, not a settlement.
+      let line = row.state === 'awarded'
+        ? '→ ' + row.winner + ' · ' + row.price + (row.unconfirmed ? ' · bid unseen' : '')
+        : row.bids + ' bid' + (row.bids === 1 ? '' : 's') + (row.best ? ' · best ' + row.best : '');
+      d.append(top, el('div', 'prev', line), el('div', 'note', row.settlement));
+      return d;
+    }));
+  } catch (e) { fail(e); }
+}
+
 async function paintList() {
+  if (view === 'jobs') return paintJobs();
   $('back').hidden = true; $('composer').hidden = true;
   try {
     const r = view === 'bot' ? await L.botActivity() : await L.inbox();
@@ -184,6 +212,7 @@ function setView(v) {
   view = v; open = null;
   $('tabInbox').setAttribute('aria-selected', String(v === 'inbox'));
   $('tabBot').setAttribute('aria-selected', String(v === 'bot'));
+  $('tabJobs').setAttribute('aria-selected', String(v === 'jobs'));
   paintList();
 }
 
@@ -207,6 +236,7 @@ async function send() {
 
 $('tabInbox').onclick = () => setView('inbox');
 $('tabBot').onclick = () => setView('bot');
+$('tabJobs').onclick = () => setView('jobs');
 $('back').onclick = () => { open = null; paintList(); };
 $('min').onclick = () => L.win('collapse');
 $('quit').onclick = () => L.win('quit');
@@ -230,7 +260,7 @@ $('msg').onkeydown = (e) => { if (e.key === 'Enter') send(); };
     $('self').textContent = 'node unreachable';
     return fail(new Error('no bot node at ' + L.base + ' — start it, or set LAWBOR_NODE_URL'));
   }
-  paintList();
+  setView(L.startView || 'inbox');
   // Poll while collapsed too (backgroundThrottling is off), so the orb badge stays live.
   setInterval(() => { if (!open) paintList(); }, 8000);
 })();

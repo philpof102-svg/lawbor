@@ -81,4 +81,28 @@ function bubble(m, self) {
   };
 }
 
-module.exports = { shortAddr, counterparty, relTime, threadRow, bubble };
+/**
+ * One derived job → the row the panel paints.
+ * The `settlement` line is not decoration: LAWBOR negotiates a price and a counterparty and stops
+ * there, so the panel must never let an "awarded" badge read as "paid". It says so on every row.
+ */
+function jobRow(j, self, now) {
+  const mine = String(j.requester || '').toLowerCase() === String(self || '').toLowerCase();
+  const best = (j.bids || []).reduce((a, b) => (a === null ? b : a), null);
+  return {
+    id: j.jobId,
+    task: String(j.task || '').replace(/\s+/g, ' ').trim(),
+    state: j.state,
+    mine,                                   // true = I am the requester, so I may award or cancel
+    bids: (j.bids || []).length,
+    best: best ? best.price : null,
+    winner: j.award ? shortAddr(j.award.worker) : null,
+    price: j.award ? j.award.price : null,
+    // an award whose bid we never saw is shown as such rather than silently equated with a real one
+    unconfirmed: !!(j.award && j.award.corroborated === false),
+    when: relTime(j.at, now),
+    settlement: 'negotiated only — no funds held or released',
+  };
+}
+
+module.exports = { shortAddr, counterparty, relTime, threadRow, bubble, jobRow };

@@ -31,9 +31,11 @@ async function api(pathname, init) {
 contextBridge.exposeInMainWorld('lawbor', {
   win: (act) => ipcRenderer.send('lawbor:win', act),
   base: CFG.base,
+  startView: CFG.startView,
   health: () => api('/health'),
   inbox: () => api('/inbox'),
   botActivity: () => api('/bot-activity'),
+  jobs: () => api('/jobs'),
   thread: (id) => api('/thread?id=' + encodeURIComponent(id)),
   say: (to, body, thread) => api('/say', { method: 'POST', body: JSON.stringify({ to, body, thread }) }),
   view,

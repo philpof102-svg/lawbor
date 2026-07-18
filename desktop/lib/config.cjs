@@ -22,6 +22,7 @@ function resolveConfig(env = {}) {
     spawn: !explicit,
     self: String(env.LAWBOR_ADDR || '').trim() || null,
     human: String(env.LAWBOR_HUMAN || '').trim() || null,
+    startView: ['inbox','bot','jobs'].includes(String(env.LAWBOR_VIEW||'').toLowerCase()) ? String(env.LAWBOR_VIEW).toLowerCase() : 'inbox',
     minScore: Number.isFinite(Number(env.LAWBOR_MIN_SCORE)) && env.LAWBOR_MIN_SCORE !== '' ? Number(env.LAWBOR_MIN_SCORE) : 40,
   };
 }

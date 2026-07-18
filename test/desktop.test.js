@@ -119,6 +119,33 @@ t('bubble carries origin + provenance so a bot message can never look human-auth
   assert.equal(mine.score, null, 'a missing score is null, not 0 — 0 would read as "untrusted"');
 });
 
+
+t('jobRow never lets an award read as a payment', () => {
+  const now = 1_784_379_335_000;
+  const awarded = V.jobRow({ jobId: 'j1', state: 'awarded', requester: A, task: 'index a contract',
+    bids: [{ worker: B, price: '15 USDC' }], award: { worker: B, price: '15 USDC', corroborated: true }, at: now - 60_000 }, A, now);
+  assert.equal(awarded.state, 'awarded');
+  assert.equal(awarded.winner, V.shortAddr(B));
+  assert.match(awarded.settlement, /no funds held or released/,
+    'every row carries the caveat — an award is an agreement, not a settlement');
+  assert.equal(awarded.unconfirmed, false);
+  const uncorroborated = V.jobRow({ jobId: 'j2', state: 'awarded', requester: A, task: 'x', bids: [],
+    award: { worker: B, price: '1', corroborated: false }, at: now }, A, now);
+  assert.equal(uncorroborated.unconfirmed, true, 'an award whose bid we never saw is flagged, not equated');
+});
+
+t('jobRow marks MY jobs so the panel knows who may award', () => {
+  const now = 1_784_379_335_000;
+  assert.equal(V.jobRow({ jobId: 'j', state: 'open', requester: A, task: 't', bids: [], at: now }, A, now).mine, true);
+  assert.equal(V.jobRow({ jobId: 'j', state: 'open', requester: B, task: 't', bids: [], at: now }, A, now).mine, false);
+});
+
+t('the pod can open on a chosen tab, and only on a real one', () => {
+  assert.equal(resolveConfig({ LAWBOR_VIEW: 'jobs' }).startView, 'jobs');
+  assert.equal(resolveConfig({ LAWBOR_VIEW: 'nonsense' }).startView, 'inbox', 'garbage falls back, never breaks the panel');
+  assert.equal(resolveConfig({}).startView, 'inbox');
+});
+
 // --- safety posture: the pod must not become a signing surface ----------------------------------
 const PANEL = fs.readFileSync(path.join(__dirname, '..', 'desktop', 'index.html'), 'utf8');
 const PRELOAD = fs.readFileSync(path.join(__dirname, '..', 'desktop', 'preload.cjs'), 'utf8');
