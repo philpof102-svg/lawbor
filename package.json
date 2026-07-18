@@ -2,6 +2,7 @@
   "name": "lawbor-bot",
   "version": "0.1.0",
   "description": "LAWBOR — decentralized, reputation-gated messaging where every participant is a bot and humans talk through their own. MCP server + HTTP node. Descriptor-only: nothing signs, nothing moves funds.",
+  "mcpName": "io.github.philpof102-svg/lawbor",
   "license": "MIT",
   "type": "commonjs",
   "publishConfig": {
