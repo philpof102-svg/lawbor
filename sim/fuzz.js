@@ -21,6 +21,11 @@
  *   I5 descriptor-only — every send returns sign.signed === false; nothing ever signs
  *   I6 the jobs fold is order-independent — shuffling the log yields the same jobs (two nodes agree)
  *   I7 reputation ≠ consent — accepting a sub-floor address still does not let their message in
+ *   I8 dependency readiness is sound — a job is ready IFF every dep exists and is awarded, and
+ *      blockedBy is EXACTLY the set of deps that are not awarded (no premature-ready, no phantom-block)
+ *   I9 delete is sticky — a tombstoned message id never reappears in the store, even after redelivery
+ *   I10 compaction is fold-preserving — jobsFrom is identical before and after compact() (it only drops
+ *       tombstones + superseded rows, which never fed the fold, so not one job may change)
  */
 const os = require('os'), path = require('path'), fs = require('fs');
 const { createNode } = require('../lib/node');
@@ -59,24 +64,34 @@ async function scenario(seed, actions) {
   for (const a of agents) registry[lower(a)] = nodes[lower(a)];
   const cleanup = () => { for (const f of files) { try { fs.unlinkSync(f); } catch {} } };
 
-  const jobIds = ['j0', 'j1', 'j2'];
+  const jobIds = ['j0', 'j1', 'j2', 'j3'];
+  const deleted = {};                                        // self → Set of ids this node has tombstoned
+  for (const a of agents) deleted[lower(a)] = new Set();
   const trace = [];
   const fail = (round, action, detail) => { cleanup(); return { failed: true, seed, round, action, detail, scores: score }; };
 
   for (let round = 0; round < actions; round++) {
     const A = pick(r, agents), B = pick(r, agents.filter((x) => x !== A));
     const na = nodes[lower(A)];
-    const act = pick(r, ['say', 'say', 'say', 'bot', 'job', 'job', 'bid', 'award', 'block', 'block', 'unblock', 'accept']);
+    const act = pick(r, ['say', 'say', 'say', 'bot', 'job', 'job', 'job-dep', 'bid', 'award', 'block', 'block', 'unblock', 'accept', 'delete', 'compact']);
     let label = act + ' ' + A.slice(2, 6) + '->' + B.slice(2, 6);
     try {
       if (act === 'say') { const s = await na.say(B, 'm' + round); if (s.sign.signed !== false) return fail(round, label, 'I5: a say returned signed:true'); }
       else if (act === 'bot') { const s = await na.botSay(B, 'b' + round); if (s.sign.signed !== false) return fail(round, label, 'I5: a botSay returned signed:true'); }
-      else if (act === 'job') { const jid = pick(r, jobIds); const { buildWork: bw } = require('../lib/work'); await na.say(B, bw('help_wanted', { jobId: jid, task: 't' })); label += ' ' + jid; }
+      else if (act === 'job') { const jid = pick(r, jobIds); await na.say(B, buildWork('help_wanted', { jobId: jid, task: 't' })); label += ' ' + jid; }
+      else if (act === 'job-dep') { const jid = pick(r, jobIds); const deps = jobIds.filter((d) => d !== jid && r() < 0.5); await na.say(B, buildWork('help_wanted', { jobId: jid, task: 't', dependsOn: deps })); label += ' ' + jid + '[' + deps.join(',') + ']'; }
       else if (act === 'bid') { const jid = pick(r, jobIds); await na.say(B, buildWork('bid', { jobId: jid, price: '1' })); label += ' ' + jid; }
       else if (act === 'award') { const jid = pick(r, jobIds); await na.say(B, buildWork('award', { jobId: jid, worker: B, price: '1' })); label += ' ' + jid; }
       else if (act === 'block') na.block(B);
       else if (act === 'unblock') na.unblock(B);
       else if (act === 'accept') na.accept(B);
+      else if (act === 'delete') { const mine = na.store.all(); if (mine.length) { const v = pick(r, mine); if (na.deleteMsg(v.id).ok) deleted[lower(A)].add(v.id); label += ' ' + v.id.slice(0, 6); } }
+      else if (act === 'compact') {
+        // I10 fold-preservation, checked inline: compaction may not change a single job
+        const before = JSON.stringify(jobsFrom(na.store.all()));
+        na.compact();
+        if (JSON.stringify(jobsFrom(na.store.all())) !== before) return fail(round, label, 'I10: compact() changed the jobs fold on ' + A.slice(2, 6));
+      }
     } catch (e) {
       return fail(round, label, 'threw: ' + e.message);
     }
@@ -87,6 +102,7 @@ async function scenario(seed, actions) {
       const n = nodes[lower(self)];
       const s = self;
       const all = n.store.all();
+      const allIds = new Set(all.map((m) => m.id));
       // I1 reputation floor: no stored INBOUND message from a sub-floor sender
       for (const m of all) if (m.dir === 'in' && (score[lower(m.from)] ?? 0) < FLOOR) return fail(round, label, 'I1: node ' + s.slice(2, 6) + ' stored inbound from sub-floor ' + m.from.slice(2, 6) + ' (score ' + score[lower(m.from)] + ')');
       const { blocked } = n.store.control();
@@ -107,6 +123,15 @@ async function scenario(seed, actions) {
       // I3 inbox ∩ requests = ∅
       const inboxT = new Set(inbox.map((t) => t.thread));
       for (const t of reqs) if (inboxT.has(t.thread)) return fail(round, label, 'I3: thread ' + t.thread.slice(0, 8) + ' in BOTH inbox and requests of ' + s.slice(2, 6));
+      // I8 dependency readiness soundness: ready IFF every dep is awarded; blockedBy is EXACTLY the unmet set
+      const fold = foldThread(all);
+      for (const j of fold.values()) {
+        const unmet = j.dependsOn.filter((d) => { const up = fold.get(d); return !up || up.state !== 'awarded'; });
+        if (j.ready !== (unmet.length === 0)) return fail(round, label, 'I8: ready flag disagrees with deps on ' + j.jobId + ' @' + s.slice(2, 6));
+        if (JSON.stringify([...j.blockedBy].sort()) !== JSON.stringify(unmet.sort())) return fail(round, label, 'I8: blockedBy != unmet deps on ' + j.jobId + ' @' + s.slice(2, 6));
+      }
+      // I9 delete stickiness: a tombstoned id never reappears in the store (even after redelivery/compact)
+      for (const id of deleted[lower(s)]) if (allIds.has(id)) return fail(round, label, 'I9: deleted id ' + id.slice(0, 6) + ' reappeared on ' + s.slice(2, 6));
     }
 
     // I6 jobs fold is order-independent — check occasionally (a shuffle + re-fold is the cost)
@@ -169,7 +194,7 @@ async function main() {
   }
   if (traceOut && lastTraceOk) fs.writeFileSync(traceOut, JSON.stringify({ seed: lastTraceOk.seed, agents: lastTraceOk.agents, trace: lastTraceOk.trace }, null, 2));
   console.log('\n✅ ' + ran + ' scenarios · ' + actionsTotal + ' random actions · ' + Math.round((Date.now() - t0) / 1000) + 's · ZERO invariant breaks');
-  console.log('   invariants held: reputation-floor · block-is-total · inbox∩requests=∅ · no-self-bid · descriptor-only · fold-order-independent · reputation≠consent');
+  console.log('   invariants held: reputation-floor · block-is-total · inbox∩requests=∅ · no-self-bid · descriptor-only · fold-order-independent · reputation≠consent · graph-readiness-sound · delete-sticky · compaction-fold-preserving');
   process.exit(0);
 }
 
