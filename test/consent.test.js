@@ -170,6 +170,31 @@ const inBot = (from, body) => buildEnvelope({ from, to: A, body, viaHuman: null 
     assert.ok(!/\bfetch\b|require\(['"](?:http|https|net|dns)['"]\)|privateKey|eth_sendTransaction|\.transfer\(/i.test(code));
   });
 
+  // ---- DoS hardening: rate-limit + the store cache -------------------------------------------
+  await t('RATE-LIMIT: a sender is capped per window even if reputable — a flood is bounded', async () => {
+    const b2 = path.join(os.tmpdir(), 'lawbor-rl-' + process.pid + '-' + (++n));
+    const store = createStore(b2 + '.jsonl', b2 + '.control');
+    let clk = 1_000_000;
+    const node = createNode({ self: A, human: 'me', preflight: async () => ({ decision: 'PROCEED', score: 70 }),
+      allowUnauthenticated: true, send: async () => {}, peers: [S], store, maxInbound: 3, rateWindowMs: 60_000, clock: () => clk });
+    const shoot = () => node.receive(buildEnvelope({ from: S, to: A, body: 'm', nonce: 'x' + Math.random(), viaHuman: 'x' }).envelope);
+    for (let i = 0; i < 3; i++) assert.equal((await shoot()).action, 'deliver', 'under the cap #' + i);
+    const over = await shoot();
+    assert.equal(over.action, 'drop'); assert.match(over.reason, /rate-limited/);
+    assert.equal(store.all().length, 3, 'the flood past the cap is never stored');
+    clk += 61_000;                                          // the window passes
+    assert.equal((await shoot()).action, 'deliver', 'after the window, delivery resumes');
+  });
+
+  await t('the store cache reflects a just-recorded message (no per-call file re-parse)', () => {
+    const b3 = path.join(os.tmpdir(), 'lawbor-cache-' + process.pid + '-' + (++n));
+    const s = createStore(b3 + '.jsonl', b3 + '.control');
+    assert.equal(s.all().length, 0);                        // primes the (empty) cache
+    s.record(buildEnvelope({ from: S, to: A, body: 'hi', viaHuman: 'x' }).envelope, { origin: 'human', dir: 'in' });
+    assert.equal(s.all().length, 1, 'record() updates the in-memory index — visible without re-reading the file');
+    assert.equal(s.countRecentFrom(S, 0), 1, 'countRecentFrom reads the same cache');
+  });
+
   console.log(`\n${pass} passed · ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

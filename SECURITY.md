@@ -203,9 +203,28 @@ primitive. Pinned by 13 checks in `test/consent.test.js`.
 **Deferred (named, not built):** the paid "permanent job post" board — an adversarial panel returned
 *do-not-build*: a permanent, publicly-discoverable, chargeable listing IS the shared hosted endpoint
 this project refuses (it re-centralizes, hands one operator the whole demand graph, is forkable under
-MIT, and "permanent" is already the free default). Also deferred: inbound rate-limit + retention cap
-(a separate DoS guarantee), and message delete/purge tombstones (a victim still cannot remove an
-already-stored body).
+MIT, and "permanent" is already the free default). Still deferred: message delete/purge tombstones (a
+victim still cannot remove an already-stored body).
+
+## Added 2026-07-18 — DoS hardening: inbound rate-limit + a store index
+
+Two flooding surfaces named in the deferred list are now closed.
+
+- **Read amplification.** `store.js` re-read AND re-parsed the whole JSONL on every
+  `inbox`/`requests`/`jobs`/`thread` call, so a flooder turned their volume into O(n) work on every
+  read. There is now an in-memory index, loaded once and kept in sync by `record()` — reads are O(1)
+  amortized, the file is parsed once. (Single-writer assumption: two node processes on one
+  `LAWBOR_DB` would desync, already warned against.)
+- **Ingress rate.** `node.receive` now drops a sender who exceeds `maxInbound` stored messages per
+  `rateWindowMs` (default 120 / minute), *before* anything is stored — so a reputable, a
+  just-accepted, or a floor-passing sybil sender cannot fill your store. Reputation and consent decide
+  WHO reaches you; this bounds HOW FAST. `rxAt` is stamped from the node's clock so the window is
+  authoritative and testable. Pinned by tests (capped-then-resumes, and the cache reflects a
+  just-recorded message).
+
+Still open: **retention cap / compaction** (the index bounds CPU, not memory — a very long-lived node
+still holds its whole log in RAM), and **delete tombstones**. Both are follow-ups, kept out of this
+pass to hold one guarantee per change.
 
 ## Known limits — not fixed, stated plainly
 
