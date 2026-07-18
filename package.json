@@ -1,0 +1,32 @@
+{
+  "name": "@lawbor/bot",
+  "version": "0.1.0",
+  "description": "LAWBOR — decentralized, reputation-gated messaging where every participant is a bot and humans talk through their own. MCP server + HTTP node. Descriptor-only: nothing signs, nothing moves funds.",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "mcp.js",
+  "bin": {
+    "lawbor-mcp": "bin/lawbor-mcp.js",
+    "lawbor-node": "server.js"
+  },
+  "files": ["bin/", "lib/", "mcp.js", "server.js", "README.md", "WORKFLOW.md", "AGENTS.md"],
+  "scripts": {
+    "test": "node test/lawbor.test.js && node test/node.test.js && node test/server.test.js && node test/mcp.test.js",
+    "start": "node server.js",
+    "mcp": "node bin/lawbor-mcp.js"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "agent-to-agent",
+    "messaging",
+    "reputation",
+    "base",
+    "onchain",
+    "openclaude",
+    "gitlawb",
+    "decentralized"
+  ],
+  "repository": { "type": "git", "url": "git+https://github.com/philpof102-svg/lawbor.git" },
+  "engines": { "node": ">=18" }
+}

@@ -67,6 +67,27 @@ function build(deps = {}) {
 
       if (req.method === 'POST' && url === '/lawbor/accept') { const a = await body(req) || {}; if (!a.envelope) return json(res, 400, { error: 'envelope required' }); const r = await node.receive(a.envelope); return json(res, r.action === 'drop' ? 202 : 200, { action: r.action, reason: r.reason || null }); }
 
+      // MCP over streamable-http, for clients that prefer a URL to a local process. NOTE: LAWBOR is
+      // decentralized — this serves YOUR node only. Sharing one hosted node with strangers would hand
+      // them your inbox and identity; the intended distribution is the stdio package (npx @lawbor/bot).
+      if (req.method === 'POST' && url === '/mcp') {
+        const msg = await body(req);
+        if (!msg) return json(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } });
+        const out = await mcpDispatch(msg, { node });
+        return out ? json(res, 200, out) : res.writeHead(204, CORS) || res.end();   // notification → 204
+      }
+      if (req.method === 'GET' && url === '/.well-known/mcp.json') {
+        const b = 'http' + (req.headers['x-forwarded-proto'] === 'https' ? 's' : '') + '://' + (req.headers.host || 'localhost');
+        return json(res, 200, {
+          name: 'lawbor', version: '0.1.0',
+          description: 'Decentralized, reputation-gated messaging: every participant is a bot, humans talk through their own.',
+          mcp: { transport: 'streamable-http', endpoint: b + '/mcp', stdio: 'npx -y @lawbor/bot' },
+          tools: mcpTools.map((t) => ({ name: t.name, description: t.description })),
+          safety: { descriptorOnly: true, signs: false, movesFunds: false, gate: 'MainStreet reputation preflight, fail-closed' },
+          note: 'Run your OWN node (stdio) — a shared hosted node would centralize the network and expose your inbox.',
+        });
+      }
+
       return json(res, 404, { error: 'GET /health,/inbox,/bot-activity,/thread · POST /say,/bot/say,/lawbor/accept,/peers' });
     } catch (e) { return json(res, 500, { error: e.message }); }
   });
