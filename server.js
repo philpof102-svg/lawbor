@@ -230,6 +230,29 @@ function build(deps = {}) {
   }) : null;
   const apps = createApps(deps.apps || [], { paywall });
 
+  /* AUTHENTICATE the premium caller. v1 gated on an unauthenticated `x-lawbor-caller` header — anyone
+   * could claim a subscribed address. Now: if a signature verifier is injected (deps.verifyAuth, same
+   * shape as the relay's verifySig), a caller proves control of their address by signing a
+   * time-windowed challenge in `x-lawbor-auth: <addr>:<sig>`. The window (this minute or last) stops
+   * replay without any server state. Without a verifier wired, we fall back to the raw header for
+   * dev/testing — /health + /apps report `authenticatesCaller` so nobody assumes a gate that isn't on. */
+  async function authCaller(req) {
+    const signed = req.headers['x-lawbor-auth'];
+    if (signed && typeof deps.verifyAuth === 'function') {
+      const i = String(signed).indexOf(':');
+      const addr = i > 0 ? String(signed).slice(0, i) : '';
+      const sig = i > 0 ? String(signed).slice(i + 1) : '';
+      if (!/^0x[a-fA-F0-9]{40}$/.test(addr)) return null;
+      const minute = Math.floor(Date.now() / 60000);
+      for (const m of [minute, minute - 1]) {                 // accept current + previous minute (clock skew)
+        const message = 'LAWBOR-AUTH:' + addr.toLowerCase() + ':' + m;
+        try { const v = await deps.verifyAuth({ message, sig, claimed: addr }); if (v && v.ok === true && String(v.signer || '').toLowerCase() === addr.toLowerCase()) return addr.toLowerCase(); } catch {}
+      }
+      return null;                                            // signed but did not verify → unauthenticated
+    }
+    return req.headers['x-lawbor-caller'] || null;            // dev fallback (unauthenticated)
+  }
+
   const server = http.createServer(async (req, res) => {
     const url = (req.url || '/').split('?')[0];
     const q = new URLSearchParams((req.url || '').split('?')[1] || '');
@@ -323,11 +346,11 @@ function build(deps = {}) {
       }
 
       // ---- installed apps (extensibility) + the premium tier ------------------------------------
-      if (req.method === 'GET' && url === '/apps') return json(res, 200, { apps: apps.apps(), premium: paywall ? { priceUsdc: paywall.price, payTo: paywall.payTo, network: paywall.network, verifies: paywall.verifies } : null });
+      if (req.method === 'GET' && url === '/apps') return json(res, 200, { apps: apps.apps(), premium: paywall ? { priceUsdc: paywall.price, payTo: paywall.payTo, network: paywall.network, verifies: paywall.verifies, authenticatesCaller: typeof deps.verifyAuth === 'function' } : null });
       if (req.method === 'POST' && url === '/x402/settle') { if (!paywall) return json(res, 503, { error: 'no premium tier configured (set LAWBOR_PAY_TO)' }); const a = await body(req) || {}; const r = await paywall.settle(a.payment || a); return json(res, r.ok ? 200 : 402, r); }
       // app routes: /app/<name>/... — tried after the built-ins, before 404. Premium apps 402 here.
       if (url.startsWith('/app/')) {
-        const caller = req.headers['x-lawbor-caller'];              // v1: caller header is UNAUTHENTICATED (see PLATFORM.md limit)
+        const caller = await authCaller(req);
         const appBody = req.method === 'POST' ? (await body(req)) : undefined;
         const r = await apps.http(req.method, url, { node, store, query: q, body: appBody, caller, now: Date.now() });
         if (r) return json(res, r.status, r.body, r.headers);

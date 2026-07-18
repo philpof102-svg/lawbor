@@ -74,11 +74,13 @@ LAWBOR_PAY_TO=0x…mainstreet-wallet  LAWBOR_PRICE=5  node server.js
 
 ## Honest limits (v1 — stated, not hidden)
 
-- **The caller header is not yet authenticated.** Premium access is gated on `x-lawbor-caller`, which
-  a client asserts — the *payment* is authenticated (the proof proves the payer), but re-presenting a
-  subscribed address is not. So v1 premium suits **content and apps**, not high-value secrets. Real
-  auth (a signed challenge proving control of the address) is the next step. `/health` and `/apps`
-  say `verifies: true/false` so nobody assumes a gate that isn't wired.
+- **Caller authentication is opt-in.** Wire `deps.verifyAuth` (same shape as the relay's `verifySig`)
+  and a caller proves control of their address by signing a time-windowed challenge
+  (`LAWBOR-AUTH:<addr>:<epoch-minute>`) in `x-lawbor-auth: <addr>:<sig>` — the minute window stops
+  replay with no server state. Then a forged claim on a subscribed address is refused. **Without**
+  `verifyAuth` wired, the gate falls back to an unauthenticated `x-lawbor-caller` header (dev/testing
+  only). `/health` and `/apps` report `authenticatesCaller` and `verifies` so no one assumes a gate
+  that isn't on. Run a real premium node with both `x402verify` and `verifyAuth` wired.
 - **A subscription is 30 days from payment**, tracked on the node's own clock in an append-only ledger
   — no external subscription service.
 - **Premium is only meaningful on a hosted node.** On a node someone self-hosts, they own the paywall;

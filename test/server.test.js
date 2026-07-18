@@ -186,6 +186,24 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     assert.deepEqual(listed.sort(), live.sort(), 'the card must not advertise tools the server does not have');
   });
 
+  await t('premium: signed caller auth gates access over HTTP; a forged signature is refused', async () => {
+    const { apps } = require('../apps/example');
+    const WALLET = '0x' + '99'.repeat(20), PAYER = '0x' + 'b1'.repeat(20);
+    const botP = build({ self: A, preflight: proceed, store: createStore(path.join(os.tmpdir(), 'lawbor-prem-' + process.pid + '.jsonl')),
+      apps, payTo: WALLET, x402verify: async (p) => ({ ok: true, payer: p.payer, amountUsdc: 5 }),
+      verifyAuth: async ({ sig }) => ({ ok: /^0x[0-9a-f]{40}$/i.test(sig), signer: sig }) });   // stub: sig IS the signer
+    await new Promise((r) => botP.server.listen(0, r));
+    const purl = 'http://127.0.0.1:' + botP.server.address().port;
+    assert.equal((await get(purl, '/apps')).body.premium.authenticatesCaller, true, 'the node advertises it authenticates callers');
+    assert.equal((await get(purl, '/app/vault/latest')).status, 402, 'no subscription → 402');
+    await post(purl, '/x402/settle', { payment: { payer: PAYER } });
+    const good = await fetch(purl + '/app/vault/latest', { headers: { 'x-lawbor-auth': PAYER + ':' + PAYER } });
+    assert.equal(good.status, 200, 'a subscribed payer who PROVES their address (valid sig) is served');
+    const forged = await fetch(purl + '/app/vault/latest', { headers: { 'x-lawbor-auth': PAYER + ':0x' + 'ee'.repeat(20) } });
+    assert.equal(forged.status, 402, 'claiming the payer address but signing with another key is refused');
+    botP.server.close();
+  });
+
   botA.server.close(); botB.server.close();
   for (const f of [dbA, dbB]) { try { fs.unlinkSync(f); } catch {} }
 
