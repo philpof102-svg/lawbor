@@ -35,6 +35,7 @@
     "start": "node server.js",
     "mcp": "node bin/lawbor-mcp.js",
     "desktop": "electron desktop/main.cjs",
+    "signoff": "bash signoff.sh",
     "sim": "node sim/interaction.js",
     "sim:org": "node sim/dynamic-org.js",
     "fuzz": "node sim/fuzz.js",
