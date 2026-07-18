@@ -134,6 +134,16 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     assert.deepEqual(botA.node.peers(), botA.mesh.addrs(), 'relay and transport read ONE book');
   });
 
+  await t('blocking hides a sender\'s ALREADY-STORED job from /jobs (not just future ones)', async () => {
+    const { buildWork } = require('../lib/work');
+    const { buildEnvelope } = require('../lib/envelope');
+    const P = '0x' + 'da'.repeat(20);                              // a peer whose job is already stored
+    botA.node.store.record(buildEnvelope({ from: P, to: A, body: buildWork('help_wanted', { jobId: 'stored-job', task: 'x' }), viaHuman: null }).envelope, { origin: 'bot', dir: 'in' });
+    assert.ok((await get(urlA, '/jobs')).body.jobs.some((j) => j.jobId === 'stored-job'), 'visible before the block');
+    assert.equal((await post(urlA, '/block', { addr: P })).status, 200);
+    assert.ok(!(await get(urlA, '/jobs')).body.jobs.some((j) => j.jobId === 'stored-job'), 'gone after the block — a blocked address is invisible in /jobs too');
+  });
+
   /* ---- the MCP surface must be reachable OVER HTTP -------------------------------------------
    * Both routes returned 500 "mcpDispatch is not defined" for weeks: server.js never required
    * ./mcp. The suite missed it because test/mcp.test.js imports ../mcp directly and never went

@@ -85,7 +85,9 @@ async function dispatch(msg, deps = {}) {
           if (!a.addr) return ok({ content: [{ type: 'text', text: 'tool error: addr required' }], isError: true });
           payload = node.accept(a.addr);
         } else if (name === 'lawbor_jobs') {
-          const jobs = work.jobsFrom(node.store.all());
+          // a blocked address is invisible in jobs too (posts and bids) — fold only non-blocked messages.
+          const { blocked: jobBlocked } = node.store.control();
+          const jobs = work.jobsFrom(node.store.all().filter((m) => !jobBlocked.has(String(m.from).toLowerCase())));
           payload = { jobs: a.state ? jobs.filter((j) => j.state === a.state) : jobs,
             note: 'negotiation only — nothing here holds, releases or enforces payment' };
         } else if (name === 'lawbor_post_job' || name === 'lawbor_bid' || name === 'lawbor_award') {

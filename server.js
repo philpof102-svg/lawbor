@@ -251,7 +251,10 @@ function build(deps = {}) {
         return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason || null });
       }
       if (req.method === 'GET' && url === '/jobs') {
-        const jobs = work.jobsFrom(store.all());
+        // a blocked address is invisible in /jobs too — fold only non-blocked messages, so a blocked
+        // sender's job posts AND bids disappear (they used to show here even though you blocked them).
+        const { blocked: jobBlocked } = store.control();
+        const jobs = work.jobsFrom(store.all().filter((m) => !jobBlocked.has(String(m.from).toLowerCase())));
         const state = q.get('state');
         return json(res, 200, {
           jobs: state ? jobs.filter((j) => j.state === state) : jobs,

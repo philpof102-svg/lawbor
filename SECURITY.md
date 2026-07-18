@@ -185,9 +185,15 @@ missing gate.
 Consent is enforced **locally and only locally**: block and accept lists live on your node in a
 control log you fold on read (`lib/consent.js`), are never gossiped, hold no key and touch no network.
 Reputation (MainStreet PROCEED ≥ floor) controls **mesh admission, not contact** — a reputable
-stranger can still only land in your **Requests** bucket until you reply or accept them. Blocking
-drops a sender's inbound messages **before they are stored** and returns no delivery confirmation, so
-a blocked sender cannot distinguish a block from silence.
+stranger can still only land in your **Requests** bucket until you reply or accept them.
+
+A block is **TOTAL**: it drops a sender's inbound on **every** surface — human messages, autonomous
+bot chatter, and job/negotiation messages — **before they are stored**, and returns no delivery
+confirmation, so a blocked sender cannot distinguish a block from silence. It also hides that
+address's already-stored content from your views, including `/jobs` (posts and bids). This was
+tightened after adversarial probing found the first cut only checked human-origin messages, so a
+blocked sender could switch to sending jobs `as:'bot'` and keep spamming your `/jobs`. Quarantine
+(the Requests bucket) is a separate, softer, read-time thing and applies only to human first contact.
 
 **Not addressed by this change:** bodies are still plaintext, and an accepted or reputable sender is
 not rate-limited and the store is not retention-capped, so volume flooding is still possible (see

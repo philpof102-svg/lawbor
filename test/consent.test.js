@@ -8,6 +8,7 @@ const { foldControl, decideInbound } = require('../lib/consent');
 const { createStore } = require('../lib/store');
 const { createNode } = require('../lib/node');
 const { buildEnvelope } = require('../lib/envelope');
+const { buildWork } = require('../lib/work');
 
 let pass = 0, fail = 0;
 const t = (n, fn) => Promise.resolve().then(fn).then(() => { pass++; console.log('  ✓ ' + n); }, (e) => { fail++; console.log('  ✗ ' + n + '\n      ' + (e && e.message)); });
@@ -55,7 +56,8 @@ const inBot = (from, body) => buildEnvelope({ from, to: A, body, viaHuman: null 
     assert.equal(d(B), 'inbox', 'accepted');
     assert.equal(d(S), 'inbox', 'we replied → implicit consent');
     assert.equal(d('0x' + '77'.repeat(20)), 'requests', 'unknown first contact');
-    assert.equal(d(X, 'bot'), 'bot', 'the autonomous feed is never quarantined');
+    assert.equal(d(X, 'bot'), 'blocked', 'a block beats bot origin — a block is TOTAL, not just an inbox filter');
+    assert.equal(d('0x' + '77'.repeat(20), 'bot'), 'bot', 'a non-blocked bot message is the watch feed, never quarantined');
   });
 
   // ---- 1 & 2: a blocked sender is dropped before storage, with no delivery confirmation ---------
@@ -111,14 +113,24 @@ const inBot = (from, body) => buildEnvelope({ from, to: A, body, viaHuman: null 
     assert.ok(store.inbox(A).length >= 1);
   });
 
-  // ---- 7: the autonomous watch feed is untouched ----------------------------------------------
-  await t('a peer BOT\'s autonomous message is never quarantined and never consent-dropped', async () => {
+  // ---- 7: the autonomous watch feed is untouched for NON-blocked peers ------------------------
+  await t('a non-blocked peer\'s bot message is never quarantined → the watch feed', async () => {
     const { node, store } = freshNode();
-    node.block(X);
-    await node.receive(inBot(X, 'autonomous chatter'));   // bot origin, even from a blocked human's bot
+    await node.receive(inBot(S, 'autonomous chatter'));   // un-blocked stranger's bot
     assert.equal(store.botActivity(A).length, 1, 'shows in the watch feed');
     assert.equal(store.requests(A).length, 0);
     assert.equal(store.inbox(A).length, 0);
+  });
+
+  // ---- a block is TOTAL — the integration gap found by adversarial probing --------------------
+  await t('a block is TOTAL: a blocked sender is dropped on EVERY surface (human, bot, AND job)', async () => {
+    const { node, store } = freshNode();
+    node.block(X);
+    assert.equal((await node.receive(inHuman(X, 'hi'))).action, 'drop');
+    assert.equal((await node.receive(inBot(X, 'chatter'))).action, 'drop', 'bot chatter too — a block is not just an inbox filter');
+    const job = buildEnvelope({ from: X, to: A, body: buildWork('help_wanted', { jobId: 'spam', task: 't' }), viaHuman: null }).envelope;
+    assert.equal((await node.receive(job)).action, 'drop', 'job/negotiation spam too — else a blocked sender switches to `as:bot` jobs to keep spamming');
+    assert.equal(store.all().length, 0, 'a blocked sender reaches no surface and stores nothing');
   });
 
   // ---- 8,9,10: fold semantics, locality, reversal ---------------------------------------------
