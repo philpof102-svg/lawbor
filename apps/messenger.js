@@ -56,6 +56,16 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
   .newbar{ padding:10px; border-bottom:1px solid var(--line); display:flex; gap:8px }
   .newbar input{ background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:7px 10px; font:inherit; font-size:12px }
   .newbar input.addr{ flex:1 } .toast{ padding:6px 14px; font-size:12px; color:var(--dim); border-top:1px solid var(--line) }
+  .newbar input{ min-width:0 }   /* flex items default to min-width:auto and force a horizontal scrollbar */
+  /* Narrow viewport (a messenger unusable at 530px is unusable on a phone): stack the thread list above
+     the conversation instead of squeezing the pane down to a one-word-per-line column. */
+  @media (max-width:760px){
+    main{ flex-direction:column }
+    .list{ width:100%; max-height:30vh; border-right:none; border-bottom:1px solid var(--line) }
+    .bub{ max-width:88% }
+    .newbar{ flex-wrap:wrap } .newbar input{ flex:1 1 160px }
+    header{ gap:8px } .tabs{ margin-left:0 }
+  }
 </style></head><body>
 <header>
   <b>LAWBOR · messenger</b>
@@ -145,18 +155,25 @@ async function openThread(id, keep){
     }
     $('msgs').innerHTML=html||'<div class="empty">no messages</div>';
     $('msgs').scrollTop=$('msgs').scrollHeight;
+    // carry BOTH the peer and the THREAD: /say without a thread starts a new one, which would fragment
+    // a two-sided conversation into a pile of one-message threads instead of one continuous fil.
     $('body').setAttribute('data-to', peer);
+    $('body').setAttribute('data-thread', id);
   }catch(e){}
 }
-async function send(to, body){
+async function send(to, body, thread){
   if(!to||!body) return toast('need an address and a message');
-  var r=await (await fetch('/say',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({to:to, body:body})})).json();
+  var payload={to:to, body:body}; if(thread) payload.thread=thread;   // continue the fil, don't start a new one
+  var r=await (await fetch('/say',{method:'POST',headers:{'content-type':'application/json; charset=utf-8'},body:JSON.stringify(payload)})).json();
   if(r.error) return toast('refused: '+r.error);
   toast(r.delivered ? 'relayed to '+short(to)+' · descriptor signed:'+(r.sign&&r.sign.signed) : 'NOT delivered'+(r.reason?' ('+r.reason+')':'')+' — the relay gate refused it');
-  lastHash=''; await load();
+  lastHash=''; await load(); if(sel) openThread(sel, true);
 }
-$('send').onclick=function(){ var to=$('body').getAttribute('data-to'); send(to,$('body').value).then(function(){ $('body').value=''; }); };
-$('nsend').onclick=function(){ send($('naddr').value.trim(), $('nbody').value).then(function(){ $('nbody').value=''; }); };
+$('send').onclick=function(){
+  var to=$('body').getAttribute('data-to'), th=$('body').getAttribute('data-thread'), txt=$('body').value;
+  $('body').value=''; send(to, txt, th);
+};
+$('nsend').onclick=function(){ var a=$('naddr').value.trim(), t=$('nbody').value; $('nbody').value=''; send(a, t); };
 function setTab(){
   var tabs=document.querySelectorAll('.tab');
   for(var i=0;i<tabs.length;i++) tabs[i].classList.toggle('on', tabs[i].getAttribute('data-v')===view);
