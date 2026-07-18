@@ -393,7 +393,11 @@ function build(deps = {}) {
         const caller = await authCaller(req);
         const appBody = req.method === 'POST' ? (await body(req)) : undefined;
         const r = await apps.http(req.method, url, { node, store, query: q, body: appBody, caller, now: Date.now() });
-        if (r) return json(res, r.status, r.body, r.headers);
+        if (r) {
+          // a raw contentType (HTML/SVG/text) is served verbatim so an app can ship a real UI, not just JSON
+          if (r.contentType && typeof r.body === 'string') { res.writeHead(r.status, { 'content-type': r.contentType, 'access-control-allow-origin': '*' }); return res.end(r.body); }
+          return json(res, r.status, r.body, r.headers);
+        }
       }
 
       return json(res, 404, { error: 'GET /health,/inbox,/requests,/bot-activity,/thread,/jobs,/graph,/apps,/app/<name>/... · POST /say,/bot/say,/block,/unblock,/accept,/delete,/work,/x402/settle,/lawbor/*,/peers' });
@@ -404,7 +408,8 @@ function build(deps = {}) {
 
 module.exports = { build };
 if (require.main === module) {
-  const { server, startHeartbeat } = build();
+  // ship the built-in org-graph viewer (a free app) by default on a standalone node
+  const { server, startHeartbeat } = build({ apps: [require('./apps/orggraph')] });
   const PORT = Number(process.env.PORT || 4830);
   server.listen(PORT, () => {
     console.log('LAWBOR bot on :' + PORT + ' — self ' + SELF + ' — reputation-gated, descriptor-only. Set LAWBOR_ADDR + a signer to go live.');

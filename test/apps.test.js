@@ -107,6 +107,35 @@ const premApp = { name: 'vault', description: 'premium', premium: true, routes: 
     assert.equal(pw.challenge().body.accepts[0].payTo, WALLET);
   });
 
+  // ---- raw contentType passthrough (an app ships a UI, not just JSON) + the built-in orggraph app ----
+  await t('an app route may serve a raw contentType body (HTML/SVG), not only JSON', async () => {
+    const apps = createApps([{ name: 'page', description: 'x', routes: [
+      { method: 'GET', path: '/', handle: () => ({ contentType: 'text/html', body: '<h1>hi</h1>' }) },
+      { method: 'GET', path: '/json', handle: () => ({ body: { ok: true } }) },
+    ] }], {});
+    const html = await apps.http('GET', '/app/page/', {});
+    assert.equal(html.contentType, 'text/html'); assert.equal(html.body, '<h1>hi</h1>');
+    const j = await apps.http('GET', '/app/page/json', {});
+    assert.equal(j.contentType, undefined, 'a normal JSON route carries no contentType'); assert.deepEqual(j.body, { ok: true });
+  });
+
+  await t('the built-in orggraph app serves an HTML page and a /data graph fold of the node store', async () => {
+    const { createStore } = require('../lib/store');
+    const { buildWork } = require('../lib/work');
+    const base = path.join(require('node:os').tmpdir(), 'lawbor-orggraph-test-' + process.pid);
+    const store = createStore(base + '.jsonl', base + '.control');
+    const A = '0x' + 'a'.repeat(40), B = '0x' + 'b'.repeat(40);
+    store.record({ id: '0x1', thread: 't', from: A, to: B, body: buildWork('help_wanted', { jobId: 'build', task: 'b' }), ts: 1 }, { origin: 'bot', dir: 'out', rxAt: 1 });
+    store.record({ id: '0x2', thread: 't', from: A, to: B, body: buildWork('help_wanted', { jobId: 'deploy', task: 'd', dependsOn: ['build'] }), ts: 1 }, { origin: 'bot', dir: 'out', rxAt: 2 });
+    const apps = createApps([require('../apps/orggraph')], {});
+    const page = await apps.http('GET', '/app/orggraph/', { store });
+    assert.ok(/text\/html/.test(page.contentType) && page.body.includes('<svg'), 'serves an HTML page with an svg');
+    const data = await apps.http('GET', '/app/orggraph/data', { store });
+    assert.deepEqual(data.body.ready, ['build'], 'ready frontier = the un-blocked root');
+    assert.deepEqual(data.body.edges, [{ from: 'deploy', dependsOn: 'build' }], 'the dependency edge is exposed');
+    assert.equal(apps.apps()[0].name, 'orggraph');
+  });
+
   console.log(`\n${pass} passed · ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
