@@ -72,6 +72,28 @@ LAWBOR_PAY_TO=0x…mainstreet-wallet  LAWBOR_PRICE=5  node server.js
 # wire deps.x402verify to your x402 facilitator in code, or via a small adapter
 ```
 
+## The premium tier, shipped: `apps/premium-feed.js`
+
+The paid tier is not a diagram any more — it ships as a built-in app. `premium-feed` is the operator's
+**curated members feed**, and it is the honesty model made concrete:
+
+- The app's **code is free** (it's in this repo, MIT). What the subscription buys is the **operator's
+  content**: markdown entries they write and host. **A fork gets this app with an empty feed** — by
+  design, because the curation is the product. Nothing is fabricated: an empty directory returns an
+  explicit "the operator has not published yet", never invented filler.
+- Publish an entry by dropping a markdown file in `LAWBOR_PREMIUM_DIR` (default `data/premium/`, which is
+  gitignored — it's the operator's content, not the repo's). The first `# heading` is the title; newest first.
+- Every route and tool is gated: `GET /app/premium-feed/` (members page), `/latest`, `/list`, and the MCP
+  tools `app_premium-feed_latest` / `_list`. Unsubscribed ⇒ **402 + the x402 pointer**; subscribed ⇒ served;
+  subscription expires on the node's clock ⇒ 402 again. **No verifier wired ⇒ 503, never served free.**
+
+```bash
+LAWBOR_PAY_TO=0x…mainstreet-wallet  LAWBOR_PRICE=5  node server.js
+mkdir -p data/premium && echo "# Week 1\n\nthe operator's note" > data/premium/week-1.md
+```
+
+Pinned by tests: 402-until-paid, content-after-paid, honest-when-empty, refused-when-expired, fail-closed.
+
 ## Honest limits (v1 — stated, not hidden)
 
 - **Caller authentication is opt-in.** Wire `deps.verifyAuth` (same shape as the relay's `verifySig`)

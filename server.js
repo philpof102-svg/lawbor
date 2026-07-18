@@ -415,7 +415,10 @@ module.exports = { build };
 if (require.main === module) {
   // ship the built-in free apps by default on a standalone node: the org-graph viewer, a node digest,
   // and a stateless two-agent game (proof that you ship on it — see PLATFORM.md).
-  const { server, startHeartbeat } = build({ apps: [require('./apps/orggraph'), require('./apps/standup'), require('./apps/tictactoe')] });
+  const { server, startHeartbeat } = build({ apps: [
+    require('./apps/orggraph'), require('./apps/standup'), require('./apps/tictactoe'),
+    require('./apps/premium-feed'),   // PREMIUM: refused (fail-closed) until LAWBOR_PAY_TO + a verifier are wired
+  ] });
   const PORT = Number(process.env.PORT || 4830);
   server.listen(PORT, () => {
     console.log('LAWBOR bot on :' + PORT + ' — self ' + SELF + ' — reputation-gated, descriptor-only. Set LAWBOR_ADDR + a signer to go live.');

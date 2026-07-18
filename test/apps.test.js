@@ -182,6 +182,56 @@ const premApp = { name: 'vault', description: 'premium', premium: true, routes: 
     assert.equal(tool.payload.messages, 2);
   });
 
+  // ---- the real premium app: the operator's curated feed, gated by x402 ------------------------
+  await t('premium-feed: 402 until subscribed, content after — and an empty feed is honest, not invented', async () => {
+    const os = require('node:os');
+    const dir = path.join(os.tmpdir(), 'lawbor-premfeed-' + process.pid);
+    fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(dir, { recursive: true });
+    process.env.LAWBOR_PREMIUM_DIR = dir;
+    const feed = require('../apps/premium-feed');
+
+    let now = 1_000_000_000_000;
+    const subs = memSubs();
+    const paywall = createPaywall({ payTo: WALLET, price: '5', periodDays: 30, subs, clock: () => now,
+      verify: async (p) => ({ ok: true, payer: p.payer, amountUsdc: 5 }) });
+    const apps = createApps([feed], { paywall });
+
+    // 1. unsubscribed → the x402 challenge, never the content
+    const denied = await apps.http('GET', '/app/premium-feed/latest', { caller: PAYER });
+    assert.equal(denied.status, 402, 'unpaid caller gets the 402 payment challenge');
+    const deniedTool = await apps.tool('app_premium-feed_latest', {}, { caller: PAYER });
+    assert.equal(deniedTool.isError, true, 'the MCP tool is refused too');
+
+    // 2. pay → served. Empty feed must say so honestly (no fabricated content).
+    await paywall.settle({ payer: PAYER });
+    const empty = await apps.http('GET', '/app/premium-feed/latest', { caller: PAYER });
+    assert.equal(empty.status, 200, 'subscribed payer is served');
+    assert.equal(empty.body.empty, true);
+    assert.match(empty.body.note, /has not published/, 'an empty feed is stated, not invented');
+
+    // 3. the operator publishes → the same subscriber now gets the real entry
+    fs.writeFileSync(path.join(dir, 'week-1.md'), '# Week 1 — operator note\n\nreal curated content');
+    const got = await apps.http('GET', '/app/premium-feed/latest', { caller: PAYER });
+    assert.equal(got.body.title, 'Week 1 — operator note');
+    assert.match(got.body.body, /real curated content/);
+    const html = await apps.http('GET', '/app/premium-feed/', { caller: PAYER });
+    assert.ok(/text\/html/.test(html.contentType) && html.body.includes('Week 1'), 'members page renders the entry');
+
+    // 4. the subscription expires on our clock → back to 402, content withheld
+    now += 31 * 86400000;
+    assert.equal((await apps.http('GET', '/app/premium-feed/latest', { caller: PAYER })).status, 402, 'expired sub is refused again');
+
+    delete process.env.LAWBOR_PREMIUM_DIR;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  await t('premium-feed FAILS CLOSED with no paywall wired — never served free', async () => {
+    const apps = createApps([require('../apps/premium-feed')]);   // no paywall
+    const r = await apps.http('GET', '/app/premium-feed/latest', { caller: PAYER });
+    assert.equal(r.status, 503);
+    assert.match(r.body.error, /fail closed/i);
+  });
+
   console.log(`\n${pass} passed · ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
