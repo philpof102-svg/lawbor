@@ -29,6 +29,8 @@ const dns = require('dns').promises;
 const { createNode } = require('./lib/node');
 const { createStore } = require('./lib/store');
 const { createMesh, isPrivateAddress, isLoopback, isLan } = require('./lib/mesh');
+const { createApps } = require('./lib/apps');
+const { createPaywall } = require('./lib/paywall');
 const beat = require('./lib/beat');
 const work = require('./lib/work');
 // The MCP surface. server.js advertised /mcp and /.well-known/mcp.json for weeks while BOTH returned
@@ -158,7 +160,7 @@ function build(deps = {}) {
     peers: () => mesh.addrs(),
     selectTargets: (to, opts) => mesh.selectTargets(to, opts) });
 
-  const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(obj)); };
+  const json = (res, code, obj, extra) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*', ...(extra || {}) }); res.end(JSON.stringify(obj)); };
   const body = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 2e6) req.destroy(); }); req.on('end', () => { try { r(b ? JSON.parse(b) : {}); } catch { r(null); } }); });
 
   /**
@@ -214,6 +216,19 @@ function build(deps = {}) {
     if (beatTimer.unref) beatTimer.unref();
   }
   const stopHeartbeat = () => { if (beatTimer) { clearTimeout(beatTimer); beatTimer = null; } };
+
+  /* PREMIUM tier + APPS (optional). The premium tier is a HOSTED node's content, not the software —
+   * see PLATFORM.md. A paywall exists only when LAWBOR_PAY_TO (the operator's wallet) is set; payments
+   * go STRAIGHT to that wallet via x402 (the node never holds a key), and verification is injected
+   * (deps.x402verify → an x402 facilitator; without it, premium fails closed). Apps register routes +
+   * tools; premium apps are gated by the paywall. */
+  const payTo = deps.payTo || process.env.LAWBOR_PAY_TO || null;
+  const paywall = payTo ? createPaywall({
+    payTo, price: process.env.LAWBOR_PRICE || '5', network: process.env.LAWBOR_NETWORK || 'base',
+    verify: deps.x402verify,
+    subs: { record: (p, u) => store.appendSub(p, u), until: (p) => store.subUntil(p) },
+  }) : null;
+  const apps = createApps(deps.apps || [], { paywall });
 
   const server = http.createServer(async (req, res) => {
     const url = (req.url || '/').split('?')[0];
@@ -292,7 +307,7 @@ function build(deps = {}) {
       if (req.method === 'POST' && url === '/mcp') {
         const msg = await body(req);
         if (!msg) return json(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } });
-        const out = await mcpDispatch(msg, { node });
+        const out = await mcpDispatch(msg, { node, apps });
         return out ? json(res, 200, out) : res.writeHead(204, CORS) || res.end();   // notification → 204
       }
       if (req.method === 'GET' && url === '/.well-known/mcp.json') {
@@ -307,7 +322,18 @@ function build(deps = {}) {
         });
       }
 
-      return json(res, 404, { error: 'GET /health,/inbox,/requests,/bot-activity,/thread,/jobs,/lawbor/peers · POST /say,/bot/say,/block,/unblock,/accept,/work,/lawbor/accept,/lawbor/offer,/peers' });
+      // ---- installed apps (extensibility) + the premium tier ------------------------------------
+      if (req.method === 'GET' && url === '/apps') return json(res, 200, { apps: apps.apps(), premium: paywall ? { priceUsdc: paywall.price, payTo: paywall.payTo, network: paywall.network, verifies: paywall.verifies } : null });
+      if (req.method === 'POST' && url === '/x402/settle') { if (!paywall) return json(res, 503, { error: 'no premium tier configured (set LAWBOR_PAY_TO)' }); const a = await body(req) || {}; const r = await paywall.settle(a.payment || a); return json(res, r.ok ? 200 : 402, r); }
+      // app routes: /app/<name>/... — tried after the built-ins, before 404. Premium apps 402 here.
+      if (url.startsWith('/app/')) {
+        const caller = req.headers['x-lawbor-caller'];              // v1: caller header is UNAUTHENTICATED (see PLATFORM.md limit)
+        const appBody = req.method === 'POST' ? (await body(req)) : undefined;
+        const r = await apps.http(req.method, url, { node, store, query: q, body: appBody, caller, now: Date.now() });
+        if (r) return json(res, r.status, r.body, r.headers);
+      }
+
+      return json(res, 404, { error: 'GET /health,/inbox,/requests,/bot-activity,/thread,/jobs,/apps,/app/<name>/... · POST /say,/bot/say,/block,/unblock,/accept,/work,/x402/settle,/lawbor/*,/peers' });
     } catch (e) { return json(res, 500, { error: e.message }); }
   });
   return { server, node, mesh, startHeartbeat, stopHeartbeat };

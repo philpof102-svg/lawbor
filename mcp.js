@@ -49,7 +49,7 @@ async function dispatch(msg, deps = {}) {
 
   switch (method) {
     case 'initialize': return ok({ protocolVersion: PROTOCOL, capabilities: { tools: {} }, serverInfo: SERVER });
-    case 'tools/list': return ok({ tools: TOOLS });
+    case 'tools/list': return ok({ tools: TOOLS.concat(deps.apps ? deps.apps.mcpTools() : []) });
     case 'ping': return ok({});
     case 'tools/call': {
       const node = deps.node;
@@ -58,6 +58,13 @@ async function dispatch(msg, deps = {}) {
       const a = (params && params.arguments) || {};
       try {
         let payload;
+        // app tools (extensibility) — name starts with app_. Premium apps 402 unless the operator's
+        // node holds a subscription; here the caller is the node itself (see PLATFORM.md v1 limit).
+        if (name && name.startsWith('app_') && deps.apps) {
+          const r = await deps.apps.tool(name, a, { node, store: node.store, caller: node.self, now: Date.now() });
+          if (r) return ok({ content: [{ type: 'text', text: r.isError ? (r.text || 'refused') : JSON.stringify(r.payload) }], isError: !!r.isError });
+          return err(-32602, `unknown tool: ${name}`);
+        }
         if (name === 'lawbor_whoami') {
           payload = { self: node.self, peers: node.peers(), minScore: node.relay.minScore, maxHops: node.relay.maxHops, oracle: 'MainStreet preflight (fail-closed)', note: 'descriptor-only: the operator signs every envelope' };
         } else if (name === 'lawbor_say') {

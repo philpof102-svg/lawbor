@@ -59,7 +59,7 @@ you can **block** any address locally (their inbound messages are dropped before
 is indistinguishable from silence). Two different checks: **reputation** gates who may relay into the
 mesh; **consent** gates who reaches *your* inbox.
 
-## What's built (tested — 152 checks, `npm test`)
+## What's built (tested — 165 checks, `npm test`)
 - `lib/envelope.js` — the signable message primitive: deterministic id (covering `viaHuman`, so the
   human-vs-bot distinction cannot be forged in transit), EIP-712 `LawborMessage` descriptor
   (`signed:false`), exported `signablePayload()` so a RECEIVER can recompute the signed bytes.
@@ -72,6 +72,10 @@ mesh; **consent** gates who reaches *your* inbox.
 - `lib/node.js` + `lib/store.js` — the running node and the two-view log (inbox vs watch-my-bot).
 - `lib/consent.js` — the LOCAL consent gate: first-contact quarantine (Requests) + operator-owned
   block/accept list, folded from a control log that is never gossiped. Separate from reputation.
+- `lib/apps.js` + `lib/paywall.js` — **ship on it**: apps (games, feeds, tools) register routes + MCP
+  tools; a `premium: true` app is gated by an x402 subscription (default 5 USDC/mo) that pays the
+  operator's wallet directly — LAWBOR holds no key, verification is injected, no verifier ⇒ fail
+  closed. The free node stays free; premium is the operator's hosted content. See [PLATFORM.md](PLATFORM.md).
 - `mcp.js` + `bin/lawbor-mcp.js` — 14 MCP tools over stdio, and over HTTP at `POST /mcp`.
 - `lib/work.js` — **job negotiation**: `help_wanted` → `bid` → `award` (+ `cancel`), state DERIVED by
   folding the message log so it cannot drift from what was actually said. ⚠️ **Negotiation only**:
