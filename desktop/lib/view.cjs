@@ -105,4 +105,23 @@ function jobRow(j, self, now) {
   };
 }
 
-module.exports = { shortAddr, counterparty, relTime, threadRow, bubble, jobRow };
+/**
+ * A first-contact (Requests) thread → the row the panel paints. Unlike an inbox row it exposes the
+ * peer's RAW address (`withAddr`), because the panel needs it to Block or Accept them — those are
+ * per-address consent actions, not per-thread. Ordering "when" uses lastAt (our clock, rxAt) so a
+ * spoofed sender ts cannot make cold-outreach spam look freshly arrived.
+ */
+function requestRow(t, self, now) {
+  const me = String(self || '').toLowerCase();
+  const peer = (t.peers || []).find((p) => String(p).toLowerCase() !== me) || null;
+  return {
+    id: t.thread,
+    withAddr: peer,                                   // raw — the block/accept target
+    with: peer ? shortAddr(peer) : '—',
+    preview: String(t.last || '').replace(/\s+/g, ' ').trim(),
+    count: Number(t.messages) || 0,
+    when: relTime(Number.isFinite(t.lastAt) ? t.lastAt : t.lastTs, now),
+  };
+}
+
+module.exports = { shortAddr, counterparty, relTime, threadRow, bubble, jobRow, requestRow };

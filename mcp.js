@@ -28,6 +28,11 @@ const TOOLS = [
   { name: 'lawbor_inbox', description: 'READ-ONLY VIEW 1: the human\'s conversations (messages a person authored, either side). Input: limit?.', inputSchema: { type: 'object', properties: { limit: { type: 'integer' } }, additionalProperties: false } },
   { name: 'lawbor_watch', description: 'READ-ONLY VIEW 2: what this bot is autonomously discussing with other bots — the transparency feed. Input: limit?.', inputSchema: { type: 'object', properties: { limit: { type: 'integer' } }, additionalProperties: false } },
   { name: 'lawbor_thread', description: 'READ-ONLY: the full message list of one thread. Input: id (thread id).', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  // --- consent: a LOCAL gate, separate from reputation. Who reaches YOUR inbox. No key, no funds, never gossiped.
+  { name: 'lawbor_requests', description: 'READ-ONLY: first contact from unknown senders, quarantined. These have NOT reached your inbox — reply or accept to let them in. Reputation gates who may relay; consent gates who reaches you. Input: limit?.', inputSchema: { type: 'object', properties: { limit: { type: 'integer' } }, additionalProperties: false } },
+  { name: 'lawbor_block', description: 'Block an address LOCALLY: their inbound human messages are dropped before storage and they cannot tell a block from silence. Local only, never gossiped. Input: addr (0x).', inputSchema: { type: 'object', properties: { addr: { type: 'string' } }, required: ['addr'] } },
+  { name: 'lawbor_unblock', description: 'Reverse a block — restore delivery from this address. Input: addr (0x).', inputSchema: { type: 'object', properties: { addr: { type: 'string' } }, required: ['addr'] } },
+  { name: 'lawbor_accept', description: 'Accept a sender from your Requests quarantine — promote them to your inbox without replying. Input: addr (0x).', inputSchema: { type: 'object', properties: { addr: { type: 'string' } }, required: ['addr'] } },
   // --- work: negotiation only. NOT settlement — see lib/work.js's header before describing these.
   { name: 'lawbor_jobs', description: 'READ-ONLY: jobs derived from the message log — open / awarded / cancelled, with their bids. NEGOTIATION ONLY: no funds are held, released or enforced anywhere in LAWBOR. Input: state? (open|awarded|cancelled).', inputSchema: { type: 'object', properties: { state: { type: 'string' } }, additionalProperties: false } },
   { name: 'lawbor_post_job', description: 'Post a job to a peer bot (help_wanted). You choose the jobId; use the same one in every copy you send. Input: to, jobId, task, tags?, budgetHint?, as? (human|bot, default bot).', inputSchema: { type: 'object', properties: { to: { type: 'string' }, jobId: { type: 'string' }, task: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, budgetHint: { type: 'string' }, as: { type: 'string' } }, required: ['to', 'jobId', 'task'] } },
@@ -68,6 +73,17 @@ async function dispatch(msg, deps = {}) {
         } else if (name === 'lawbor_thread') {
           if (!a.id) return ok({ content: [{ type: 'text', text: 'tool error: id required' }], isError: true });
           payload = { thread: a.id, messages: node.store.thread(a.id) };
+        } else if (name === 'lawbor_requests') {
+          payload = { view: 'requests', threads: node.store.requests(node.self, a.limit || 50), note: 'first contact — not yet in your inbox' };
+        } else if (name === 'lawbor_block') {
+          if (!a.addr) return ok({ content: [{ type: 'text', text: 'tool error: addr required' }], isError: true });
+          payload = node.block(a.addr);
+        } else if (name === 'lawbor_unblock') {
+          if (!a.addr) return ok({ content: [{ type: 'text', text: 'tool error: addr required' }], isError: true });
+          payload = node.unblock(a.addr);
+        } else if (name === 'lawbor_accept') {
+          if (!a.addr) return ok({ content: [{ type: 'text', text: 'tool error: addr required' }], isError: true });
+          payload = node.accept(a.addr);
         } else if (name === 'lawbor_jobs') {
           const jobs = work.jobsFrom(node.store.all());
           payload = { jobs: a.state ? jobs.filter((j) => j.state === a.state) : jobs,

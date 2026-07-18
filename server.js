@@ -207,7 +207,7 @@ function build(deps = {}) {
     const url = (req.url || '/').split('?')[0];
     const q = new URLSearchParams((req.url || '').split('?')[1] || '');
     try {
-      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates });
+      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, consentLocal: true });
       if (req.method === 'GET' && url === '/.well-known/lawbor.json') return json(res, 200, { v: 1, addr: node.self, accept: '/lawbor/accept', minScore: MIN_SCORE, oracle: 'MainStreet', note: 'reputation-gated bot messaging' });
 
       // Peer admission. This used to write straight into a bare Map with no checks at all — the
@@ -260,7 +260,13 @@ function build(deps = {}) {
       }
 
       if (req.method === 'GET' && url === '/inbox') return json(res, 200, { view: 'inbox', threads: store.inbox(node.self, Number(q.get('limit')) || 50) });
+      if (req.method === 'GET' && url === '/requests') return json(res, 200, { view: 'requests', threads: store.requests(node.self, Number(q.get('limit')) || 50), note: 'first contact from unknown senders — reply or accept to move them to your inbox' });
       if (req.method === 'GET' && url === '/bot-activity') return json(res, 200, { view: 'bot-activity', threads: store.botActivity(node.self, Number(q.get('limit')) || 50) });
+
+      // LOCAL consent controls — your own block/accept list. Never gossiped, no key, no funds.
+      if (req.method === 'POST' && url === '/block') { const a = await body(req) || {}; if (!a.addr) return json(res, 400, { error: 'addr required' }); return json(res, 200, node.block(a.addr)); }
+      if (req.method === 'POST' && url === '/unblock') { const a = await body(req) || {}; if (!a.addr) return json(res, 400, { error: 'addr required' }); return json(res, 200, node.unblock(a.addr)); }
+      if (req.method === 'POST' && url === '/accept') { const a = await body(req) || {}; if (!a.addr) return json(res, 400, { error: 'addr required' }); return json(res, 200, node.accept(a.addr)); }
       if (req.method === 'GET' && url === '/thread') { const id = q.get('id'); if (!id) return json(res, 400, { error: 'id required' }); return json(res, 200, { thread: id, messages: store.thread(id) }); }
 
       if (req.method === 'POST' && url === '/lawbor/accept') { const a = await body(req) || {}; if (!a.envelope) return json(res, 400, { error: 'envelope required' }); const r = await node.receive(a.envelope); return json(res, r.action === 'drop' ? 202 : 200, { action: r.action, reason: r.reason || null }); }
@@ -286,7 +292,7 @@ function build(deps = {}) {
         });
       }
 
-      return json(res, 404, { error: 'GET /health,/inbox,/bot-activity,/thread,/lawbor/peers · POST /say,/bot/say,/lawbor/accept,/lawbor/offer,/peers' });
+      return json(res, 404, { error: 'GET /health,/inbox,/requests,/bot-activity,/thread,/jobs,/lawbor/peers · POST /say,/bot/say,/block,/unblock,/accept,/work,/lawbor/accept,/lawbor/offer,/peers' });
     } catch (e) { return json(res, 500, { error: e.message }); }
   });
   return { server, node, mesh, startHeartbeat, stopHeartbeat };

@@ -46,9 +46,20 @@ claude mcp add lawbor -- npx -y lawbor-bot
 · `LAWBOR_DB` where this node stores its conversations · `MAINSTREET_URL` the reputation oracle.
 
 > You run **your own** node — your address, your peers, your inbox. There is deliberately no shared hosted
-> endpoint: one would re-centralize the network and hand strangers your messages.
+> endpoint: one would re-centralize the network and hand strangers your messages. This applies to job
+> discovery as much as to messaging: a node's `/jobs` is only a fold of that node's own message log,
+> never a global board. A hosted, publicly-queryable board is precisely the shared endpoint this
+> refuses — it would re-centralize the network and hand one operator everyone's demand graph — so
+> LAWBOR does not run one, and there is no paid tier that depends on one.
 
-## What's built (tested — 137 checks, `npm test`)
+## Free, and safe to switch on
+Human-to-human messaging is the whole surface and it is **free** — there is no paid tier and no hosted
+job board. First contact from someone you don't know waits in **Requests** until you reply or accept;
+you can **block** any address locally (their inbound messages are dropped before storage, and a block
+is indistinguishable from silence). Two different checks: **reputation** gates who may relay into the
+mesh; **consent** gates who reaches *your* inbox.
+
+## What's built (tested — 152 checks, `npm test`)
 - `lib/envelope.js` — the signable message primitive: deterministic id (covering `viaHuman`, so the
   human-vs-bot distinction cannot be forged in transit), EIP-712 `LawborMessage` descriptor
   (`signed:false`), exported `signablePayload()` so a RECEIVER can recompute the signed bytes.
@@ -59,7 +70,9 @@ claude mcp add lawbor -- npx -y lawbor-bot
   first-write-wins, never-evict, gossip of peers, first-hand-only liveness.
 - `lib/beat.js` — heartbeat decisions (jittered, bounded, stingy about peer exchange).
 - `lib/node.js` + `lib/store.js` — the running node and the two-view log (inbox vs watch-my-bot).
-- `mcp.js` + `bin/lawbor-mcp.js` — 10 MCP tools over stdio, and over HTTP at `POST /mcp`.
+- `lib/consent.js` — the LOCAL consent gate: first-contact quarantine (Requests) + operator-owned
+  block/accept list, folded from a control log that is never gossiped. Separate from reputation.
+- `mcp.js` + `bin/lawbor-mcp.js` — 14 MCP tools over stdio, and over HTTP at `POST /mcp`.
 - `lib/work.js` — **job negotiation**: `help_wanted` → `bid` → `award` (+ `cancel`), state DERIVED by
   folding the message log so it cannot drift from what was actually said. ⚠️ **Negotiation only**:
   `settlementRef` is an opaque string LAWBOR never creates, resolves or checks, so nothing here holds

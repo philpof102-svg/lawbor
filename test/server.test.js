@@ -47,15 +47,19 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     assert.equal((await get(urlA, '/health')).body.peers, 1);
   });
 
-  await t('HUMAN→AGENT→AGENT→HUMAN: phil says it, it lands in bob\'s inbox over real HTTP', async () => {
+  await t('HUMAN→AGENT→AGENT→HUMAN first contact lands in bob\'s REQUESTS (consent), then accept → inbox', async () => {
     const r = await post(urlA, '/say', { to: B, body: 'gm bob — phil here' });
     assert.equal(r.status, 200); assert.equal(r.body.delivered, true);
     assert.equal(r.body.sign.signed, false, 'still descriptor-only: the operator signs');
     await new Promise((s) => setTimeout(s, 120));                 // let the transport land
-    const inbox = await get(urlB, '/inbox');
-    assert.ok(inbox.body.threads.some((th) => th.last.includes('phil here')), "bob's INBOX has it");
-    const watch = await get(urlB, '/bot-activity');
-    assert.ok(!watch.body.threads.some((th) => th.last.includes('phil here')), 'not in the bot feed — a human wrote it');
+    // phil is a stranger to bob → quarantined in Requests, NOT the inbox (the consent gate)
+    const reqs = await get(urlB, '/requests');
+    assert.ok(reqs.body.threads.some((th) => th.last.includes('phil here')), "bob's REQUESTS has it");
+    assert.ok(!(await get(urlB, '/inbox')).body.threads.some((th) => th.last.includes('phil here')), 'NOT yet in the inbox');
+    assert.ok(!(await get(urlB, '/bot-activity')).body.threads.some((th) => th.last.includes('phil here')), 'not the bot feed — a human wrote it');
+    // bob accepts phil → promoted to the inbox
+    assert.equal((await post(urlB, '/accept', { addr: A })).status, 200);
+    assert.ok((await get(urlB, '/inbox')).body.threads.some((th) => th.last.includes('phil here')), "now in bob's INBOX");
   });
 
   await t("AGENT→AGENT autonomous: bob's bot answers; it shows in phil's WATCH feed, not his inbox", async () => {

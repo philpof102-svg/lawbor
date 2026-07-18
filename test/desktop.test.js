@@ -146,6 +146,24 @@ t('the pod can open on a chosen tab, and only on a real one', () => {
   assert.equal(resolveConfig({}).startView, 'inbox');
 });
 
+
+t('requestRow exposes the RAW peer address so the panel can block/accept them', () => {
+  const now = 1_784_379_335_000;
+  const row = V.requestRow({ thread: 't1', peers: [A, B], last: 'gm  we have not met', messages: 1, lastAt: now - 120000 }, A, now);
+  assert.equal(row.withAddr, B, 'raw address, not shortened — block/accept need it');
+  assert.equal(row.with, V.shortAddr(B), 'display is still shortened');
+  assert.equal(row.preview, 'gm we have not met');
+  assert.equal(row.when, '2m');
+  assert.equal(V.requestRow({ thread: 't', peers: [A], last: 'x', messages: 1, lastAt: now }, A, now).withAddr, null, 'self-only → no block target');
+});
+
+t('requestRow orders on lastAt (our clock), never a spoofed sender ts', () => {
+  const now = 1_784_379_335_000;
+  // even if the row also carries a wild lastTs, the panel time uses lastAt
+  const row = V.requestRow({ thread: 't', peers: [A, B], last: 'x', messages: 1, lastAt: now - 3600000, lastTs: 9999999999 }, A, now);
+  assert.equal(row.when, '1h', 'display follows our receive clock, not the sender ts');
+});
+
 // --- safety posture: the pod must not become a signing surface ----------------------------------
 const PANEL = fs.readFileSync(path.join(__dirname, '..', 'desktop', 'index.html'), 'utf8');
 const PRELOAD = fs.readFileSync(path.join(__dirname, '..', 'desktop', 'preload.cjs'), 'utf8');

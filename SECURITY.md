@@ -174,6 +174,33 @@ until Phil opens it · License: to be set by Phil" while the repo is public and 
 MIT, and counted "13/13" tests when the suite is 117. `package.json` listed `AGENTS.md` in `files[]`,
 which does not exist.
 
+## Added 2026-07-18 — local consent (the free surface, made safe to switch on)
+
+Free human-to-human messaging already shipped (`POST /say` → the inbox), but it could not be
+responsibly promoted to the primary surface: `relay.accept` delivered any sender scoring ≥ the floor
+straight into a person's inbox, with no per-recipient consent, no block, no report — and the store is
+append-only with no delete, so a harasser's messages were permanent and unstoppable. This adds the
+missing gate.
+
+Consent is enforced **locally and only locally**: block and accept lists live on your node in a
+control log you fold on read (`lib/consent.js`), are never gossiped, hold no key and touch no network.
+Reputation (MainStreet PROCEED ≥ floor) controls **mesh admission, not contact** — a reputable
+stranger can still only land in your **Requests** bucket until you reply or accept them. Blocking
+drops a sender's inbound messages **before they are stored** and returns no delivery confirmation, so
+a blocked sender cannot distinguish a block from silence.
+
+**Not addressed by this change:** bodies are still plaintext, and an accepted or reputable sender is
+not rate-limited and the store is not retention-capped, so volume flooding is still possible (see
+deferred hardening below). Consent is not a spam solution; it is a first-contact filter plus a stop
+primitive. Pinned by 13 checks in `test/consent.test.js`.
+
+**Deferred (named, not built):** the paid "permanent job post" board — an adversarial panel returned
+*do-not-build*: a permanent, publicly-discoverable, chargeable listing IS the shared hosted endpoint
+this project refuses (it re-centralizes, hands one operator the whole demand graph, is forkable under
+MIT, and "permanent" is already the free default). Also deferred: inbound rate-limit + retention cap
+(a separate DoS guarantee), and message delete/purge tombstones (a victim still cannot remove an
+already-stored body).
+
 ## Known limits — not fixed, stated plainly
 
 - **Not sybil-resistant.** A peer slot costs one address scoring ≥ `minScore`. Signature

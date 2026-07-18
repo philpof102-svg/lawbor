@@ -26,7 +26,7 @@
     ".claude-plugin/"
   ],
   "scripts": {
-    "test": "node test/lawbor.test.js && node test/node.test.js && node test/server.test.js && node test/mcp.test.js && node test/manifest.test.js && node test/mesh.test.js && node test/beat.test.js && node test/work.test.js && node test/desktop.test.js",
+    "test": "node test/lawbor.test.js && node test/node.test.js && node test/server.test.js && node test/mcp.test.js && node test/manifest.test.js && node test/mesh.test.js && node test/beat.test.js && node test/work.test.js && node test/consent.test.js && node test/desktop.test.js",
     "prepublishOnly": "npm test",
     "start": "node server.js",
     "mcp": "node bin/lawbor-mcp.js",

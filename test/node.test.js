@@ -73,14 +73,16 @@ const lowScore = async () => ({ decision: 'PROCEED', score: 5 });
   });
 
   try { fs.unlinkSync(process.env.LAWBOR_DB); } catch {}
-  await t('inbox ordering uses OUR clock, not the sender-chosen ts (spam cannot pin itself to the top)', () => {
+  await t('ordering uses OUR clock, not the sender-chosen ts (spam cannot pin itself to the top)', () => {
     const os2 = require('node:os'), p2 = require('node:path');
-    const s2 = createStore(p2.join(os2.tmpdir(), 'lawbor-rx-' + process.pid + '.jsonl'));
+    const base2 = p2.join(os2.tmpdir(), 'lawbor-rx-' + process.pid);
+    const s2 = createStore(base2 + '.jsonl', base2 + '.control');
     const now = Math.floor(Date.now() / 1000);
-    // ts is attacker-chosen and validated nowhere: a stranger dated this ten years ahead
+    // both are first contact from strangers → the Requests bucket (consent gate); the anti-pinning
+    // property holds THERE now, which is exactly where cold-outreach spam lands.
     s2.record(buildEnvelope({ from: '0x' + '99'.repeat(20), to: A, body: 'SPAM dated 2036', ts: now + 315360000, viaHuman: 'x' }).envelope, { origin: 'human', dir: 'in', rxAt: 1000 });
     s2.record(buildEnvelope({ from: B, to: A, body: 'real message from bob', ts: now, viaHuman: 'bob' }).envelope, { origin: 'human', dir: 'in', rxAt: 2000 });
-    assert.match(s2.inbox(A)[0].last, /real message/, 'a future-dated envelope must not outrank a newer real one');
+    assert.match(s2.requests(A)[0].last, /real message/, 'a future-dated envelope must not outrank a newer real one');
   });
 
   console.log(`\n${pass} passed · ${fail} failed`);
