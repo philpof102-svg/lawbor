@@ -108,6 +108,26 @@ the hostname is resolved and every returned address is re-checked with `isPrivat
 change the answer in between. Closing that needs a connect-time lookup hook (undici `Agent`), which
 would cost a runtime dependency. This narrows the window; it does not eliminate it.
 
+### Heartbeat — because "caller-driven" meant nobody drove it
+
+`mesh.js` schedules nothing by design, which is correct for a library and wrong in practice until
+something drives it: `prune()` was never called, so dead peers stayed in the book forever. `lawbor-node`
+now runs a heartbeat (`LAWBOR_BEAT=0` disables it; it is never started on `require`, so embedding the
+module opens no sockets and the test suite inherits no timer).
+
+Decisions live in `lib/beat.js`, pure and offline-tested; the timer and the sockets stay in
+`server.js`. Three bounds it enforces:
+
+- **Thundering herd** — every delay is jittered ±30% off an injected rng, so nodes do not align into
+  a synchronised storm as the network grows.
+- **Heartbeat amplification** — a tick contacts at most `batch` peers (default 4), oldest-contact
+  first, so cost is O(batch) not O(peers), and no peer starves.
+- **Graph leakage** — peer exchange runs at most once every 5 ticks, to a single peer, with a bounded
+  sample. Growing the mesh is worth some disclosure; broadcasting the table is not.
+
+Liveness stays strictly first-hand: only our own contact result writes it, so no peer can mark
+another dead. Verified live — a peer killed mid-run was contacted, marked failed, and pruned.
+
 ### Development escape — loopback only
 
 Two nodes on one machine is how anyone actually tries LAWBOR, and the url policy correctly refuses

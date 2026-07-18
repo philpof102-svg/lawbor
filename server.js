@@ -27,6 +27,7 @@ const dns = require('dns').promises;
 const { createNode } = require('./lib/node');
 const { createStore } = require('./lib/store');
 const { createMesh, isPrivateAddress, isLoopback } = require('./lib/mesh');
+const beat = require('./lib/beat');
 
 const SELF = process.env.LAWBOR_ADDR || '0x0000000000000000000000000000000000000000';
 const MAINSTREET_URL = (process.env.MAINSTREET_URL || 'https://avisradar-production.up.railway.app').replace(/\/$/, '');
@@ -139,6 +140,60 @@ function build(deps = {}) {
   const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(obj)); };
   const body = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 2e6) req.destroy(); }); req.on('end', () => { try { r(b ? JSON.parse(b) : {}); } catch { r(null); } }); });
 
+  /**
+   * The heartbeat — the loop that makes liveness and pruning actually happen.
+   * ==========================================================================
+   * mesh.js schedules nothing by design, so without this prune() was never called and dead peers
+   * stayed in the book forever. Decisions come from lib/beat.js (pure, tested offline); this
+   * function only owns the timer and the sockets.
+   *
+   * NOT started automatically: a library that silently opens sockets on require is a bad neighbour,
+   * and the test suite would inherit a background timer. `lawbor-node` starts it; embedders opt in.
+   */
+  let beatTimer = null, tick = 0;
+  function startHeartbeat(o = {}) {
+    const intervalMs = Number(o.intervalMs || process.env.LAWBOR_BEAT_MS || 60_000);
+    if (beatTimer) return;
+    const run = async () => {
+      tick++;
+      try {
+        const peers = mesh.addrs().map((a) => ({ addr: a, lastSeen: (mesh.record(a) || {}).lastSeen }));
+        for (const addr of beat.dueFor(peers, Date.now(), { intervalMs, batch: o.batch || 4 })) {
+          const url = mesh.urlFor(addr);
+          if (!url) continue;
+          try {
+            const r = await doFetch(url.replace(/\/$/, '') + '/health',
+              { redirect: 'error', signal: AbortSignal.timeout(5000) });
+            mesh.noteContact(addr, r.ok);                 // FIRST-HAND only — a peer cannot mark another dead
+          } catch { mesh.noteContact(addr, false); }
+        }
+        const gone = mesh.prune();
+        if (gone.length) console.log('[lawbor] pruned ' + gone.length + ' unreachable peer(s)');
+
+        // Peer exchange, deliberately stingy: one peer, every few ticks (it leaks the graph).
+        const target = beat.offerTarget(mesh.addrs(), tick, { everyNTicks: o.everyNTicks || 5 });
+        if (target) {
+          const url = mesh.urlFor(target);
+          const sample = mesh.sample(3);
+          if (url && sample.length) {
+            try {
+              await doFetch(url.replace(/\/$/, '') + '/lawbor/offer', {
+                method: 'POST', headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ from: mesh.self, peers: sample }),
+                redirect: 'error', signal: AbortSignal.timeout(5000),
+              });
+            } catch { /* a refused offer is normal — the peer may not know us yet */ }
+          }
+        }
+      } catch (e) { console.error('[lawbor] heartbeat:', e.message); }
+      beatTimer = setTimeout(run, beat.nextDelay({ intervalMs }));   // jittered — no thundering herd
+      if (beatTimer.unref) beatTimer.unref();                        // never hold the process open
+    };
+    beatTimer = setTimeout(run, beat.nextDelay({ intervalMs }));
+    if (beatTimer.unref) beatTimer.unref();
+  }
+  const stopHeartbeat = () => { if (beatTimer) { clearTimeout(beatTimer); beatTimer = null; } };
+
   const server = http.createServer(async (req, res) => {
     const url = (req.url || '/').split('?')[0];
     const q = new URLSearchParams((req.url || '').split('?')[1] || '');
@@ -200,15 +255,17 @@ function build(deps = {}) {
       return json(res, 404, { error: 'GET /health,/inbox,/bot-activity,/thread,/lawbor/peers · POST /say,/bot/say,/lawbor/accept,/lawbor/offer,/peers' });
     } catch (e) { return json(res, 500, { error: e.message }); }
   });
-  return { server, node, mesh };
+  return { server, node, mesh, startHeartbeat, stopHeartbeat };
 }
 
 module.exports = { build };
 if (require.main === module) {
-  const { server } = build();
+  const { server, startHeartbeat } = build();
   const PORT = Number(process.env.PORT || 4830);
   server.listen(PORT, () => {
     console.log('LAWBOR bot on :' + PORT + ' — self ' + SELF + ' — reputation-gated, descriptor-only. Set LAWBOR_ADDR + a signer to go live.');
+    // Liveness + pruning only happen because something drives them; mesh.js schedules nothing.
+    if (process.env.LAWBOR_BEAT !== '0') startHeartbeat();
     if (process.env.LAWBOR_ALLOW_UNAUTHENTICATED === '1') {
       console.warn('⚠️  LAWBOR_ALLOW_UNAUTHENTICATED=1 — inbound `from` is NOT verified. Anyone can claim a reputable address and inherit its score. Development only.');
     }
