@@ -81,14 +81,40 @@ bypasses, which passed both `classifyUrl()` and the exported `isPrivateAddress()
 Nothing was exposed in the meantime: `lib/mesh.js` is not yet imported by any running path (see
 below). Pinned by 7 regression tests in `test/mesh.test.js`.
 
-## Not yet wired — mesh.js is inert
+## Wired 2026-07-18 — the peer layer is now in the running path
 
-`server.js` still keeps its own `const peers = new Map()` and `POST /peers` still calls the ungated
-`relay.addPeer`. So today the peer layer's checks protect nothing in the running node, and
-`selectTargets()`'s fan-out cap does not exist in the live path. Wiring it (relay taking
-`peers: () => mesh.addrs()`, the transport resolving through `mesh.urlFor()`, and both branches of
-`relay.accept/originate` routing through `selectTargets`) is the next change. Until then, treat
-`lib/mesh.js` as reviewed-but-unused code, not as an active defence.
+`server.js` no longer keeps its own peer Map, and `POST /peers` no longer calls the ungated
+`relay.addPeer` — that route was the side-door that made every check in `mesh.js` decorative. It now
+goes through `mesh.addPeer`: url policy → discovery-card match → reputation gate → first-write-wins
+→ cap. The relay reads the book via `peers: () => mesh.addrs()` and delegates fan-out to
+`mesh.selectTargets()`, so a message to an unknown destination is bounded instead of broadcast, and
+`relay.addPeer()` returns false when the book is delegated rather than quietly minting a peer.
+
+Two nodes, live, with the wiring in place:
+
+```
+peer whose card names someone else -> refused "discovery card addr does not match the claimed peer"
+peer url 169.254.169.254           -> refused "private / loopback / link-local address refused"
+honest peering (card matches)      -> ok
+rebind of an established peer      -> refused "already bound (rebind refused)"
+GET /lawbor/peers                  -> a bounded sample, never the full table
+message A -> B                     -> delivered, lands in B's inbox
+```
+
+Transport-side defences that a static url parse cannot provide now live in `fetchDiscoveryCard()`:
+the hostname is resolved and every returned address is re-checked with `isPrivateAddress()`,
+`redirect:'error'` (a 302 must never reach an unchecked host), an abort timeout, and a 64 KiB cap.
+**Honest limit:** resolve-then-fetch is still two lookups, so a determined DNS-rebinding attacker can
+change the answer in between. Closing that needs a connect-time lookup hook (undici `Agent`), which
+would cost a runtime dependency. This narrows the window; it does not eliminate it.
+
+### Development escape — loopback only
+
+Two nodes on one machine is how anyone actually tries LAWBOR, and the url policy correctly refuses
+loopback and non-80/443 ports in production. `LAWBOR_ALLOW_LOOPBACK=1` (with
+`LAWBOR_ALLOW_INSECURE=1` for plain http) lifts that — **for loopback only**. `169.254.169.254`,
+the RFC1918 ranges and `*.internal` stay refused even in development, because those are the SSRF
+targets that matter; loopback is uninteresting to an attacker already on the box.
 
 ## Known limits — not fixed, stated plainly
 

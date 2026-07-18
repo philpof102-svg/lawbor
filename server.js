@@ -14,18 +14,32 @@
  *   GET  /bot-activity                 → VIEW 2: what the bot is autonomously discussing
  *   GET  /thread?id=…                  → the messages of one thread (either view)
  *   POST /lawbor/accept  {envelope}    → a PEER relays an envelope to us (reputation-gated inside)
- *   POST /peers          {addr, url}   → register a peer (addr→url routing for the transport)
+ *   POST /peers          {addr, url}   → operator peer admission — url policy, discovery-card match,
+ *                                        reputation gate, first-write-wins, cap (via lib/mesh.js)
+ *   POST /lawbor/offer   {from, peers} → a peer offers us PEERS (bounded per source, gated per candidate)
+ *   GET  /lawbor/peers                 → a BOUNDED sample of ours in return (never the full table)
  *
  * 🛑 No keys, no autonomous send of money. Envelopes carry a descriptor to sign; the operator signs.
  *   Reputation gate + fail-closed live in the relay. MainStreet preflight is the injectable oracle.
  */
 const http = require('http');
+const dns = require('dns').promises;
 const { createNode } = require('./lib/node');
 const { createStore } = require('./lib/store');
+const { createMesh, isPrivateAddress, isLoopback } = require('./lib/mesh');
 
 const SELF = process.env.LAWBOR_ADDR || '0x0000000000000000000000000000000000000000';
 const MAINSTREET_URL = (process.env.MAINSTREET_URL || 'https://avisradar-production.up.railway.app').replace(/\/$/, '');
 const MIN_SCORE = Number(process.env.LAWBOR_MIN_SCORE || 40);
+
+/** LAWBOR_ANCHORS="0xabc…=https://a.example,0xdef…=https://b.example" → the operator's seed peers.
+ *  No default seed ships: a hardcoded bootstrap node would quietly centralize the mesh. */
+function parseAnchors(spec) {
+  return String(spec || '').split(',').map((s) => s.trim()).filter(Boolean).map((pair) => {
+    const i = pair.indexOf('=');
+    return i === -1 ? null : { addr: pair.slice(0, i).trim(), url: pair.slice(i + 1).trim() };
+  }).filter(Boolean);
+}
 
 async function mainstreetPreflight(addr) {
   const r = await fetch(MAINSTREET_URL + '/api/agent/preflight/' + encodeURIComponent(addr), { headers: { 'x-ms-monitor': '1' } });
@@ -33,24 +47,94 @@ async function mainstreetPreflight(addr) {
   return r.json();
 }
 
-/** Build the server. deps.preflight / deps.fetch injectable for tests (no network). */
+/**
+ * Fetch a peer's discovery card — the network half of mesh admission.
+ * ====================================================================
+ * mesh.classifyUrl() is a STATIC parse: it cannot stop DNS rebinding and it cannot stop a redirect
+ * chain, because one hop after the check the socket can land anywhere. Those are transport
+ * properties, so they are enforced HERE:
+ *   - resolve the hostname ourselves and re-apply isPrivateAddress() to every address it returns
+ *   - redirect:'error' — a 302 must never be followed to an unchecked host
+ *   - an abort timeout, so one hostile peer cannot hang admission forever
+ *   - a response-size cap, so a peer cannot stream us out of memory
+ * Honest limit: resolving then fetching is still two lookups. A determined rebinding attacker can
+ * change the answer in between; closing that needs a connect-time lookup hook (undici Agent), which
+ * would cost a dependency. This narrows the window, it does not eliminate it.
+ */
+const MAX_CARD_BYTES = 64 * 1024;
+async function fetchDiscoveryCard(url, doFetch, opts = {}) {
+  const timeoutMs = opts.timeoutMs || 5000;
+  const u = new URL(url);
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  // The loopback escape must reach here too: classifyUrl may have admitted 127.0.0.1 in development,
+  // and re-refusing it at the socket would leave the mesh unusable locally for no security gain.
+  const localOk = opts.allowLoopback === true && isLoopback(host);
+  if (!localOk) {
+    if (isPrivateAddress(host)) throw new Error('private address refused');
+    const resolved = await dns.lookup(host, { all: true });
+    for (const r of resolved) {
+      if (isPrivateAddress(r.address)) throw new Error('host resolves inward (' + r.address + ') — refused');
+    }
+  }
+  const res = await doFetch(u.origin + '/.well-known/lawbor.json', {
+    redirect: 'error',
+    signal: AbortSignal.timeout(timeoutMs),
+    headers: { accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error('discovery card HTTP ' + res.status);
+  const text = await res.text();
+  if (text.length > MAX_CARD_BYTES) throw new Error('discovery card too large');
+  return JSON.parse(text);
+}
+
+/** Build the server. deps.preflight / deps.fetch / deps.verify injectable for tests (no network). */
 function build(deps = {}) {
-  const peers = new Map();                              // addr(lower) → url  (the transport routing table)
   const store = deps.store || createStore();
   const doFetch = deps.fetch || (typeof fetch !== 'undefined' ? fetch : null);
+  const self = deps.self || SELF;
+  // Development escape: loopback ONLY (never the rest of the private space — see lib/mesh.js).
+  const allowLoopback = deps.allowLoopback !== undefined ? deps.allowLoopback : process.env.LAWBOR_ALLOW_LOOPBACK === '1';
+  const allowInsecure = deps.allowInsecure !== undefined ? deps.allowInsecure : process.env.LAWBOR_ALLOW_INSECURE === '1';
+
+  /* ONE peerbook. This used to be a bare `new Map()` here PLUS a Set inside relay.js, and the two
+   * could disagree: relay said "forward", the transport had no url, the envelope silently vanished,
+   * and the human was still told delivered:true. mesh.js now owns addr→url, the relay reads it
+   * through peers(), and the transport resolves through urlFor() — they cannot drift. */
+  const mesh = deps.mesh || createMesh({
+    self,
+    preflight: deps.preflight || mainstreetPreflight,
+    verify: deps.verify || ((url) => fetchDiscoveryCard(url, doFetch, { allowLoopback })),
+    minScore: deps.minScore || MIN_SCORE,
+    anchors: parseAnchors(process.env.LAWBOR_ANCHORS),
+    allowInsecure, allowLoopback,
+  });
+
   const send = async (toAddr, env) => {                 // transport: POST the envelope to the peer's accept url
-    const url = peers.get(String(toAddr).toLowerCase());
+    const url = mesh.urlFor(String(toAddr).toLowerCase());
     if (!url || !doFetch) return;                       // unknown peer → drop (dedup makes a later resend safe)
-    await doFetch(url.replace(/\/$/, '') + '/lawbor/accept', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ envelope: env }) });
+    try {
+      await doFetch(url.replace(/\/$/, '') + '/lawbor/accept', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ envelope: env }),
+        redirect: 'error', signal: AbortSignal.timeout(8000),
+      });
+      mesh.noteContact(toAddr, true);
+    } catch (e) {
+      mesh.noteContact(toAddr, false);                  // FIRST-HAND liveness only — prune() acts on this
+      throw e;
+    }
   };
   // Signature verification is injected (node ships no ecrecover/keccak, and LAWBOR has zero deps).
   // With neither a verifier nor the explicit opt-in, the relay refuses inbound envelopes rather than
   // scoring an address the sender merely typed. See lib/relay.js::authenticate.
   const allowUnauthenticated = deps.allowUnauthenticated !== undefined
     ? deps.allowUnauthenticated : process.env.LAWBOR_ALLOW_UNAUTHENTICATED === '1';
-  const node = createNode({ self: deps.self || SELF, human: deps.human || process.env.LAWBOR_HUMAN || null,
+  const node = createNode({ self, human: deps.human || process.env.LAWBOR_HUMAN || null,
     preflight: deps.preflight || mainstreetPreflight, minScore: deps.minScore || MIN_SCORE, send, store,
-    verifySig: deps.verifySig, allowUnauthenticated });
+    verifySig: deps.verifySig, allowUnauthenticated,
+    // the relay READS the mesh's book and delegates fan-out to it — it no longer keeps its own
+    peers: () => mesh.addrs(),
+    selectTargets: (to, opts) => mesh.selectTargets(to, opts) });
 
   const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(obj)); };
   const body = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 2e6) req.destroy(); }); req.on('end', () => { try { r(b ? JSON.parse(b) : {}); } catch { r(null); } }); });
@@ -62,7 +146,26 @@ function build(deps = {}) {
       if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates });
       if (req.method === 'GET' && url === '/.well-known/lawbor.json') return json(res, 200, { v: 1, addr: node.self, accept: '/lawbor/accept', minScore: MIN_SCORE, oracle: 'MainStreet', note: 'reputation-gated bot messaging' });
 
-      if (req.method === 'POST' && url === '/peers') { const a = await body(req) || {}; if (!a.addr || !a.url) return json(res, 400, { error: 'addr + url required' }); peers.set(String(a.addr).toLowerCase(), a.url); node.addPeer(a.addr); return json(res, 200, { peers: node.peers() }); }
+      // Peer admission. This used to write straight into a bare Map with no checks at all — the
+      // ungated side-door that made every defence in mesh.js decorative. It now goes through
+      // mesh.addPeer: url policy, discovery-card match, reputation gate, first-write-wins, cap.
+      if (req.method === 'POST' && url === '/peers') {
+        const a = await body(req) || {};
+        if (!a.addr || !a.url) return json(res, 400, { error: 'addr + url required' });
+        const r = await mesh.addPeer(a.addr, a.url, { source: 'operator', confirm: a.confirm === true });
+        return json(res, r.ok ? 200 : 400, { ok: r.ok, reason: r.reason || null, peers: node.peers() });
+      }
+
+      // Peer EXCHANGE: a peer offers us peers it knows. Bounded per source, gated per candidate,
+      // and gossip can only ADD unknown addrs — never rebind or evict an established one.
+      if (req.method === 'POST' && url === '/lawbor/offer') {
+        const a = await body(req) || {};
+        if (!a.from || !Array.isArray(a.peers)) return json(res, 400, { error: 'from + peers[] required' });
+        const r = await mesh.offer(a.from, a.peers);
+        return json(res, 200, r);
+      }
+      // What WE will disclose in return: a bounded, non-transitive sample. Never the full table.
+      if (req.method === 'GET' && url === '/lawbor/peers') return json(res, 200, { peers: mesh.sample(3) });
 
       if (req.method === 'POST' && url === '/say') { const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.say(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason }); }
       if (req.method === 'POST' && url === '/bot/say') { const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.botSay(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, delivered: r.delivered }); }
@@ -94,10 +197,10 @@ function build(deps = {}) {
         });
       }
 
-      return json(res, 404, { error: 'GET /health,/inbox,/bot-activity,/thread · POST /say,/bot/say,/lawbor/accept,/peers' });
+      return json(res, 404, { error: 'GET /health,/inbox,/bot-activity,/thread,/lawbor/peers · POST /say,/bot/say,/lawbor/accept,/lawbor/offer,/peers' });
     } catch (e) { return json(res, 500, { error: e.message }); }
   });
-  return { server, node, peers };
+  return { server, node, mesh };
 }
 
 module.exports = { build };

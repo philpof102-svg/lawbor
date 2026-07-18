@@ -7,7 +7,11 @@ const os = require('node:os'); const path = require('node:path'); const fs = req
 const assert = require('node:assert');
 const { build: makeBuild } = require('../server');
 // Same as node.test.js: these predate signature verification and opt into the unauthenticated path.
-const build = (deps) => makeBuild({ allowUnauthenticated: true, ...deps });
+// Two real HTTP servers on 127.0.0.1 with random ports: the mesh's url policy correctly refuses
+// loopback and non-80/443 ports in production, so a local end-to-end test must opt into the
+// loopback escape explicitly. It stays a REAL test: the discovery card is genuinely fetched over
+// HTTP and mesh admission runs for real — only the address range is exempted.
+const build = (deps) => makeBuild({ allowUnauthenticated: true, allowLoopback: true, allowInsecure: true, ...deps });
 const { createStore } = require('../lib/store');
 
 let pass = 0, fail = 0;
@@ -88,8 +92,48 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     assert.equal((await get(urlA, '/nope')).status, 404);
   });
 
+  /* ---- the peer layer is WIRED, and must stay wired ------------------------------------------
+   * POST /peers used to write straight into a bare Map with no checks, which made every defence in
+   * mesh.js decorative. These pin the gated path so a later refactor cannot quietly reopen it. */
+  await t('POST /peers refuses a url whose discovery card names a DIFFERENT addr', async () => {
+    const C = '0x' + 'cc'.repeat(20);
+    const r = await post(urlA, '/peers', { addr: C, url: urlB });      // B's card says B, not C
+    assert.equal(r.body.ok, false);
+    assert.match(r.body.reason, /does not match/);
+    assert.ok(!r.body.peers.includes(C.toLowerCase()), 'and nothing was admitted');
+  });
+
+  await t('POST /peers refuses a private / metadata url even with the loopback escape on', async () => {
+    const r = await post(urlA, '/peers', { addr: '0x' + 'dd'.repeat(20), url: 'http://169.254.169.254' });
+    assert.equal(r.body.ok, false);
+    assert.match(r.body.reason, /private|refused/);
+  });
+
+  await t('POST /peers is FIRST-WRITE-WINS over HTTP — an established peer cannot be rebound', async () => {
+    const r = await post(urlA, '/peers', { addr: B, url: 'http://127.0.0.1:1' });
+    assert.equal(r.body.ok, false);
+    assert.match(r.body.reason, /already bound/);
+  });
+
+  await t('GET /lawbor/peers discloses a BOUNDED sample, never the whole table', async () => {
+    const r = await get(urlA, '/lawbor/peers');
+    assert.equal(r.status, 200);
+    assert.ok(Array.isArray(r.body.peers) && r.body.peers.length <= 3);
+    for (const p of r.body.peers) {
+      assert.deepEqual(Object.keys(p).sort(), ['addr', 'url'], 'no lastSeen/fails/timestamps leak');
+    }
+  });
+
+  await t('the relay no longer keeps its own peerbook — addPeer is refused when delegated', () => {
+    assert.equal(botA.node.relay.addPeer('0x' + 'ee'.repeat(20)), false,
+      'an ungated side-door into the peer set must not exist');
+    assert.deepEqual(botA.node.peers(), botA.mesh.addrs(), 'relay and transport read ONE book');
+  });
+
   botA.server.close(); botB.server.close();
   for (const f of [dbA, dbB]) { try { fs.unlinkSync(f); } catch {} }
+
   console.log(`\n${pass} passed · ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
+
