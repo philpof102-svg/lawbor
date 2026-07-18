@@ -53,6 +53,14 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
      not the instance: any element we toggle with [hidden] AND style with display: needs this pair. */
   .gate[hidden]{ display:none }
   .empty{ margin:auto; color:var(--dim); text-align:center; padding:24px; max-width:44ch }
+  /* a work message is an ordinary envelope whose body is typed JSON — render it as a job card, not raw
+     JSON, so the NEGOTIATION happens inside the conversation instead of in a separate graph app. */
+  .job{ border:1px solid var(--accent); border-radius:12px; padding:9px 12px; background:var(--panel); max-width:78% }
+  .job.mine{ align-self:flex-end } .job .k{ font-size:10px; color:var(--accent); letter-spacing:.5px }
+  .job .t{ margin:3px 0 } .job .id{ color:var(--dim); font-size:11px }
+  .job .act{ margin-top:7px; display:flex; gap:6px }
+  .jobbar{ padding:8px 10px; border-top:1px solid var(--line); display:flex; gap:6px; align-items:center; flex-wrap:wrap }
+  .jobbar input{ background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:6px 9px; font:inherit; font-size:12px; min-width:0 }
   .newbar{ padding:10px; border-bottom:1px solid var(--line); display:flex; gap:8px }
   .newbar input{ background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:7px 10px; font:inherit; font-size:12px }
   .newbar input.addr{ flex:1 } .toast{ padding:6px 14px; font-size:12px; color:var(--dim); border-top:1px solid var(--line) }
@@ -61,7 +69,9 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
      the conversation instead of squeezing the pane down to a one-word-per-line column. */
   @media (max-width:760px){
     main{ flex-direction:column }
-    .list{ width:100%; max-height:30vh; border-right:none; border-bottom:1px solid var(--line) }
+    /* flex:0 0 auto — without it .pane{flex:1} shrinks the list to ~1px (it still has items, they are
+       just invisible). Measured, not guessed: listHeight came back as 1. */
+    .list{ width:100%; flex:0 0 auto; max-height:30vh; border-right:none; border-bottom:1px solid var(--line) }
     .bub{ max-width:88% }
     .newbar{ flex-wrap:wrap } .newbar input{ flex:1 1 160px }
     header{ gap:8px } .tabs{ margin-left:0 }
@@ -87,6 +97,12 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <div class="gate" id="gate" hidden></div>
     <div class="msgs" id="msgs"><div class="empty">Pick a conversation, or write to a new address above.<br><br>A stranger's first message lands in <b>Requests</b>, not here — that's the consent gate.</div></div>
     <div class="composer"><textarea id="body" placeholder="write as the human (your bot relays it)"></textarea><button class="go" id="send">Send</button></div>
+    <div class="jobbar" id="jobbar" hidden>
+      <span style="color:var(--dim);font-size:11px">propose work →</span>
+      <input id="jid" placeholder="job id" style="width:110px">
+      <input id="jtask" placeholder="what needs doing" style="flex:1">
+      <button class="ghost" id="jpost">Post job</button>
+    </div>
     <div class="toast" id="toast"></div>
   </div>
 </main>
@@ -97,6 +113,59 @@ function short(a){ a=String(a||''); return a.slice(0,6)+'…'+a.slice(-4); }
 function peerOf(t){ for(var i=0;i<(t.peers||[]).length;i++){ if(String(t.peers[i]).toLowerCase()!==self.toLowerCase()) return t.peers[i]; } return t.peers&&t.peers[0]||''; }
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function toast(m){ $('toast').textContent=m; }
+
+// ---- work messages: an ordinary envelope whose body is typed JSON (lib/work.js) --------------------
+function asWork(b){ try{ if(typeof b!=='string'||b.charAt(0)!=='{') return null; var o=JSON.parse(b); return (o['lawbor.work']===1&&o.kind)?o:null; }catch(e){ return null; } }
+/** Thread-list preview: a work message must never show as raw JSON in the sidebar (it did).
+ *  NOTE the store truncates a thread's "last" to 80 chars, so for a work body the JSON arrives CUT and
+ *  JSON.parse always throws — parsing it was the bug. Read the fields off the text instead.
+ *  (No backticks anywhere in here: this whole page is one template literal.) */
+function preview(b){
+  if(typeof b!=='string' || b.indexOf('"lawbor.work"')<0) return b;
+  var kind=(b.match(/"kind":"([a-z_]+)"/)||[])[1]||'work';
+  var job=(b.match(/"jobId":"([^"]*)"/)||[])[1]||'';
+  var task=(b.match(/"task":"([^"]*)"/)||[])[1]||'';
+  var price=(b.match(/"price":"([^"]*)"/)||[])[1]||'';
+  if(kind==='help_wanted') return '📋 job: '+(task||job);
+  if(kind==='bid') return '💬 bid '+price+(job?' on '+job:'');
+  if(kind==='award') return '✅ awarded '+job;
+  if(kind==='cancel') return '✖ cancelled '+job;
+  return kind+' '+job;
+}
+function jobCard(w, mine, from, tags){
+  var head={help_wanted:'JOB OFFERED', bid:'BID', award:'AWARDED', cancel:'CANCELLED'}[w.kind]||w.kind;
+  var body='';
+  if(w.kind==='help_wanted') body=esc(w.task||'')+(w.dependsOn&&w.dependsOn.length?'<div class="id">waits on: '+esc(w.dependsOn.join(', '))+'</div>':'');
+  else if(w.kind==='bid') body=esc(w.price||'')+(w.eta?' · '+esc(w.eta):'');
+  else if(w.kind==='award') body='to '+esc(short(w.worker))+' · '+esc(w.price||'');
+  else if(w.kind==='cancel') body=esc(w.reason||'');
+  // the only actions offered are the ones the actor rules would actually allow (mayApply gates them for real)
+  var act='';
+  if(w.kind==='help_wanted' && !mine) act='<button class="ghost" data-act="bid" data-job="'+esc(w.jobId)+'">Bid on this</button>';
+  if(w.kind==='bid' && !mine) act='<button class="ghost" data-act="award" data-job="'+esc(w.jobId)+'" data-worker="'+esc(from)+'" data-price="'+esc(w.price||'')+'">Award to them</button>';
+  return '<div class="job'+(mine?' mine':'')+'"><div class="k">'+head+'</div><div class="t">'+body+'</div>'+
+         '<div class="id">'+esc(w.jobId)+'</div>'+(act?'<div class="act">'+act+'</div>':'')+
+         '<div class="meta" style="font-size:10px;color:var(--dim);margin-top:5px">'+esc(short(from))+tags+'</div></div>';
+}
+async function work(kind, fields){
+  var to=$('body').getAttribute('data-to'), th=$('body').getAttribute('data-thread');
+  var payload=Object.assign({to:to, kind:kind, as:'human'}, fields); if(th) payload.thread=th;
+  var r=await (await fetch('/work',{method:'POST',headers:{'content-type':'application/json; charset=utf-8'},body:JSON.stringify(payload)})).json();
+  if(r.error) return toast('refused by the actor rules: '+r.error);   // mayApply, not the UI, decides
+  toast(kind+' sent · delivered:'+r.delivered+' · descriptor signed:false');
+  lastHash=''; await load(); if(sel) openThread(sel, true);
+}
+$('msgs').addEventListener('click', function(e){
+  var b=e.target.closest && e.target.closest('button[data-act]'); if(!b) return;
+  var a=b.getAttribute('data-act');
+  if(a==='bid'){ var p=prompt('your price (e.g. 18 USDC)'); if(p) work('bid',{jobId:b.getAttribute('data-job'), price:p}); }
+  if(a==='award') work('award',{jobId:b.getAttribute('data-job'), worker:b.getAttribute('data-worker'), price:b.getAttribute('data-price')});
+});
+$('jpost').onclick=function(){
+  var id=$('jid').value.trim(), t=$('jtask').value.trim();
+  if(!id||!t) return toast('a job needs an id and a task');
+  $('jid').value=''; $('jtask').value=''; work('help_wanted',{jobId:id, task:t});
+};
 
 async function load(){
   try{
@@ -116,7 +185,7 @@ function renderList(){
   for(var i=0;i<ts.length;i++){
     var p=peerOf(ts[i]);
     html+='<div class="item'+(sel===ts[i].thread?' on':'')+'" data-t="'+ts[i].thread+'" data-p="'+p+'">'+
-      '<div class="who">'+esc(short(p))+'</div><div class="last">'+esc(ts[i].last||'')+'</div></div>';
+      '<div class="who">'+esc(short(p))+'</div><div class="last">'+esc(preview(ts[i].last||''))+'</div></div>';
   }
   if(!ts.length) html='<div class="empty" style="font-size:12px">'+(view==='requests'
     ? 'No pending requests. A sub-floor sender never even arrives — the relay drops them before storage.'
@@ -151,9 +220,12 @@ async function openThread(id, keep){
         if(m.senderScore!=null) tags+='<span class="tagr ok">score '+m.senderScore+'</span>';
       }
       tags+= m.origin==='bot' ? '<span class="tagr">bot</span>' : '<span class="tagr">human</span>';
+      var w=asWork(m.body);
+      if(w){ html+=jobCard(w, mine, m.from, tags); continue; }   // a work message renders as a job card
       html+='<div class="bub'+(mine?' mine':'')+'">'+esc(m.body)+'<div class="meta">'+esc(short(m.from))+tags+'</div></div>';
     }
     $('msgs').innerHTML=html||'<div class="empty">no messages</div>';
+    $('jobbar').hidden=false;
     $('msgs').scrollTop=$('msgs').scrollHeight;
     // carry BOTH the peer and the THREAD: /say without a thread starts a new one, which would fragment
     // a two-sided conversation into a pile of one-message threads instead of one continuous fil.
@@ -177,7 +249,7 @@ $('nsend').onclick=function(){ var a=$('naddr').value.trim(), t=$('nbody').value
 function setTab(){
   var tabs=document.querySelectorAll('.tab');
   for(var i=0;i<tabs.length;i++) tabs[i].classList.toggle('on', tabs[i].getAttribute('data-v')===view);
-  sel=null; $('gate').hidden=true; $('msgs').innerHTML='<div class="empty">Pick a conversation.</div>'; renderList();
+  sel=null; $('gate').hidden=true; $('jobbar').hidden=true; $('msgs').innerHTML='<div class="empty">Pick a conversation.</div>'; renderList();
 }
 var tabs=document.querySelectorAll('.tab');
 for(var i=0;i<tabs.length;i++) tabs[i].addEventListener('click',(function(el){ return function(){ view=el.getAttribute('data-v'); setTab(); }; })(tabs[i]));
