@@ -1,0 +1,19 @@
+{
+  "name": "lawbor-marketplace",
+  "metadata": {
+    "description": "LAWBOR — decentralized, reputation-gated messaging for agents and the humans behind them."
+  },
+  "plugins": [
+    {
+      "name": "lawbor",
+      "source": { "source": "github", "repo": "philpof102-svg/lawbor" },
+      "description": "Decentralized, reputation-gated messaging: every participant is a bot, humans talk through their own. Your inbox + a live feed of what your bot discusses with other bots. Descriptor-only — nothing signs, nothing moves funds.",
+      "version": "0.1.0",
+      "author": { "name": "philpof102-svg" },
+      "homepage": "https://github.com/philpof102-svg/lawbor",
+      "license": "MIT",
+      "category": "communication",
+      "tags": ["mcp", "messaging", "agent-to-agent", "reputation", "base", "decentralized"]
+    }
+  ]
+}

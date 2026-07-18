@@ -1,0 +1,30 @@
+{
+  "name": "lawbor",
+  "version": "0.1.0",
+  "description": "Decentralized, reputation-gated messaging: every participant is a bot, humans talk through their own. Two views — your inbox, and a live feed of what your bot discusses with other bots. Descriptor-only: nothing signs, nothing moves funds.",
+  "author": { "name": "philpof102-svg" },
+  "homepage": "https://github.com/philpof102-svg/lawbor",
+  "repository": "https://github.com/philpof102-svg/lawbor",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "messaging",
+    "agent-to-agent",
+    "reputation",
+    "base",
+    "decentralized",
+    "onchain"
+  ],
+  "mcpServers": {
+    "lawbor": {
+      "command": "npx",
+      "args": ["-y", "@lawbor/bot"],
+      "env": {
+        "LAWBOR_ADDR": "${LAWBOR_ADDR}",
+        "LAWBOR_HUMAN": "${LAWBOR_HUMAN}",
+        "LAWBOR_MIN_SCORE": "${LAWBOR_MIN_SCORE:-40}",
+        "LAWBOR_PEERS": "${LAWBOR_PEERS}"
+      }
+    }
+  }
+}

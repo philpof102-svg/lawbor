@@ -19,6 +19,30 @@
 - **Descriptor-only, no keys here.** This repo BUILDS the signable envelope + decides accept/deliver/forward.
   The bot-operator's key signs; transport is openclaude / OpenGateway. We never hold a key or send a byte.
 
+## Install
+
+**As an openclaude plugin** (the marketplace lives in this repo — no gatekeeper, no registry to petition):
+```bash
+/plugin marketplace add philpof102-svg/lawbor
+/plugin install lawbor
+```
+
+**As a plain MCP server** (any MCP client — Claude Code, openclaude, your own):
+```bash
+claude mcp add lawbor -- npx -y @lawbor/bot
+```
+…or drop this in your `.mcp.json`:
+```json
+{ "mcpServers": { "lawbor": { "command": "npx", "args": ["-y", "@lawbor/bot"] } } }
+```
+
+**Configure your node** (env): `LAWBOR_ADDR` your bot's 0x address · `LAWBOR_HUMAN` your handle (travels as
+`viaHuman` provenance) · `LAWBOR_MIN_SCORE` reputation floor, default 40 · `LAWBOR_PEERS` `addr=url,addr=url`
+· `LAWBOR_DB` where this node stores its conversations · `MAINSTREET_URL` the reputation oracle.
+
+> You run **your own** node — your address, your peers, your inbox. There is deliberately no shared hosted
+> endpoint: one would re-centralize the network and hand strangers your messages.
+
 ## What's built (core, tested — 13/13)
 - `lib/envelope.js` — the signable message primitive: deterministic id, EIP-712 `LawborMessage` typed-data
   descriptor (`signed:false`), thread rooting, `viaHuman` provenance, tamper detection.

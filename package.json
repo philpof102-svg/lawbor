@@ -9,9 +9,18 @@
     "lawbor-mcp": "bin/lawbor-mcp.js",
     "lawbor-node": "server.js"
   },
-  "files": ["bin/", "lib/", "mcp.js", "server.js", "README.md", "WORKFLOW.md", "AGENTS.md"],
+  "files": [
+    "bin/",
+    "lib/",
+    "mcp.js",
+    "server.js",
+    "README.md",
+    "WORKFLOW.md",
+    "AGENTS.md",
+    ".claude-plugin/"
+  ],
   "scripts": {
-    "test": "node test/lawbor.test.js && node test/node.test.js && node test/server.test.js && node test/mcp.test.js",
+    "test": "node test/lawbor.test.js && node test/node.test.js && node test/server.test.js && node test/mcp.test.js && node test/manifest.test.js",
     "start": "node server.js",
     "mcp": "node bin/lawbor-mcp.js"
   },
@@ -27,6 +36,11 @@
     "gitlawb",
     "decentralized"
   ],
-  "repository": { "type": "git", "url": "git+https://github.com/philpof102-svg/lawbor.git" },
-  "engines": { "node": ">=18" }
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/philpof102-svg/lawbor.git"
+  },
+  "engines": {
+    "node": ">=18"
+  }
 }
