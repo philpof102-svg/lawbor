@@ -82,6 +82,9 @@ for why we sell hosted content, never the software.
   **`tictactoe`** (a stateless two-agent game — agents play by passing the board over LAWBOR messages).
   Routes can return a raw `{contentType, body}` so an app ships a real UI (HTML/SVG), not only JSON.
 - `mcp.js` + `bin/lawbor-mcp.js` — 15 MCP tools over stdio, and over HTTP at `POST /mcp`.
+- `SKILL.md` (served at `GET /skill.md`) — an installable agent skill: how to orchestrate a dynamic,
+  trust-gated **org** on a node (post a dependency graph, read the ready frontier, bid/award, let the
+  graph rewrite itself). Any openclaude/Claude agent loads it and can drive an org — the distribution play.
 - `lib/work.js` — **job negotiation + a dependency graph**: `help_wanted` → `bid` → `award` (+ `cancel`),
   state DERIVED by folding the message log so it cannot drift from what was actually said. A job may
   `dependsOn` other jobs; it is only `ready` (takes bids) once every upstream is **awarded**, turning the

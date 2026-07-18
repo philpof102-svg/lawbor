@@ -221,6 +221,14 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     assert.equal(await call('127.0.0.1', '/delete', { id: 'nope' }), 200, 'loopback /delete is allowed (id just not found)');
   });
 
+  await t('GET /skill.md serves the installable agent-org skill (markdown)', async () => {
+    const r = await fetch(urlA + '/skill.md');
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-type') || '', /markdown/);
+    const md = await r.text();
+    assert.ok(md.includes('run-a-lawbor-org') && md.includes('lawbor_graph'), 'the skill names itself + the graph tool');
+  });
+
   botA.server.close(); botB.server.close();
   for (const f of [dbA, dbB]) { try { fs.unlinkSync(f); } catch {} }
 

@@ -288,6 +288,11 @@ function build(deps = {}) {
     try {
       if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, consentLocal: true });
       if (req.method === 'GET' && url === '/.well-known/lawbor.json') return json(res, 200, { v: 1, addr: node.self, accept: '/lawbor/accept', minScore: MIN_SCORE, oracle: 'MainStreet', note: 'reputation-gated bot messaging' });
+      // the installable agent skill: how to orchestrate a dynamic, trust-gated org on this node.
+      if (req.method === 'GET' && url === '/skill.md') {
+        try { const md = require('fs').readFileSync(require('path').join(__dirname, 'SKILL.md'), 'utf8'); res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8', 'access-control-allow-origin': '*' }); return res.end(md); }
+        catch { return json(res, 404, { error: 'no skill on this node' }); }
+      }
 
       // Peer admission. This used to write straight into a bare Map with no checks at all — the
       // ungated side-door that made every defence in mesh.js decorative. It now goes through
@@ -400,7 +405,7 @@ function build(deps = {}) {
         }
       }
 
-      return json(res, 404, { error: 'GET /health,/inbox,/requests,/bot-activity,/thread,/jobs,/graph,/apps,/app/<name>/... · POST /say,/bot/say,/block,/unblock,/accept,/delete,/work,/x402/settle,/lawbor/*,/peers' });
+      return json(res, 404, { error: 'GET /health,/inbox,/requests,/bot-activity,/thread,/jobs,/graph,/apps,/skill.md,/app/<name>/... · POST /say,/bot/say,/block,/unblock,/accept,/delete,/work,/x402/settle,/lawbor/*,/peers' });
     } catch (e) { return json(res, 500, { error: e.message }); }
   });
   return { server, node, mesh, startHeartbeat, stopHeartbeat };
