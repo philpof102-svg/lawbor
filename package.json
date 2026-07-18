@@ -19,7 +19,6 @@
     "WORKFLOW.md",
     "DESKTOP.md",
     "SECURITY.md",
-    "AGENTS.md",
     ".claude-plugin/"
   ],
   "scripts": {

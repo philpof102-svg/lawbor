@@ -28,6 +28,12 @@ const { createNode } = require('./lib/node');
 const { createStore } = require('./lib/store');
 const { createMesh, isPrivateAddress, isLoopback } = require('./lib/mesh');
 const beat = require('./lib/beat');
+// The MCP surface. server.js advertised /mcp and /.well-known/mcp.json for weeks while BOTH returned
+// 500 'mcpDispatch is not defined' — this module was never required. The suite missed it because
+// test/mcp.test.js imports ../mcp directly and never went through the HTTP server. A machine-readable
+// discovery card promising tools that 500 is the worst kind of false claim: it is aimed at agents.
+const { dispatch: mcpDispatch, TOOLS: mcpTools } = require('./mcp');
+const CORS = { 'access-control-allow-origin': '*' };
 
 const SELF = process.env.LAWBOR_ADDR || '0x0000000000000000000000000000000000000000';
 const MAINSTREET_URL = (process.env.MAINSTREET_URL || 'https://avisradar-production.up.railway.app').replace(/\/$/, '');

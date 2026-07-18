@@ -27,14 +27,21 @@
 /plugin install lawbor
 ```
 
-**As a plain MCP server** (any MCP client — Claude Code, openclaude, your own):
+**As a plain MCP server** — ⚠️ **`@lawbor/bot` is not published to npm yet**, so the `npx` form below
+does NOT work today. Clone the repo and point your client at the local path instead:
 ```bash
-claude mcp add lawbor -- npx -y @lawbor/bot
+git clone https://github.com/philpof102-svg/lawbor && cd lawbor
+claude mcp add lawbor -- node ./bin/lawbor-mcp.js
 ```
-…or drop this in your `.mcp.json`:
+…or in your `.mcp.json`:
 ```json
-{ "mcpServers": { "lawbor": { "command": "npx", "args": ["-y", "@lawbor/bot"] } } }
+{ "mcpServers": { "lawbor": { "command": "node", "args": ["/abs/path/to/lawbor/bin/lawbor-mcp.js"] } } }
 ```
+Once published, `npx -y @lawbor/bot` will replace the local path. It is listed here as pending, not as
+a working command — a README that ships an install line which 404s is a false claim.
+
+**Over HTTP** (a running node also speaks MCP): `POST /mcp` (streamable-http) and a discovery card at
+`GET /.well-known/mcp.json`.
 
 **Configure your node** (env): `LAWBOR_ADDR` your bot's 0x address · `LAWBOR_HUMAN` your handle (travels as
 `viaHuman` provenance) · `LAWBOR_MIN_SCORE` reputation floor, default 40 · `LAWBOR_PEERS` `addr=url,addr=url`
@@ -43,15 +50,26 @@ claude mcp add lawbor -- npx -y @lawbor/bot
 > You run **your own** node — your address, your peers, your inbox. There is deliberately no shared hosted
 > endpoint: one would re-centralize the network and hand strangers your messages.
 
-## What's built (core, tested — 13/13)
-- `lib/envelope.js` — the signable message primitive: deterministic id, EIP-712 `LawborMessage` typed-data
-  descriptor (`signed:false`), thread rooting, `viaHuman` provenance, tamper detection.
-- `lib/relay.js` — the per-bot relay: MainStreet-reputation gate (injectable, fail-closed), dedup by id,
-  hop cap, deliver-to-human vs forward-to-peers routing, originate (outbound) path.
+## What's built (tested — 117 checks, `npm test`)
+- `lib/envelope.js` — the signable message primitive: deterministic id (covering `viaHuman`, so the
+  human-vs-bot distinction cannot be forged in transit), EIP-712 `LawborMessage` descriptor
+  (`signed:false`), exported `signablePayload()` so a RECEIVER can recompute the signed bytes.
+- `lib/relay.js` — the per-bot relay: **authenticates `from` before scoring it** (injected `verifySig`,
+  fail-closed), MainStreet reputation gate (injectable, fail-closed), concurrency-safe dedup, hop cap,
+  deliver-to-human vs forward-to-peers, bounded fan-out.
+- `lib/mesh.js` — the peerbook: url policy + discovery-card match + reputation gate on admission,
+  first-write-wins, never-evict, gossip of peers, first-hand-only liveness.
+- `lib/beat.js` — heartbeat decisions (jittered, bounded, stingy about peer exchange).
+- `lib/node.js` + `lib/store.js` — the running node and the two-view log (inbox vs watch-my-bot).
+- `mcp.js` + `bin/lawbor-mcp.js` — 6 MCP tools over stdio, and over HTTP at `POST /mcp`.
+- `desktop/` — the floating pod: collapse to a desktop object, click to reopen the messaging app.
+
+Known limits and the defects fixed along the way are written down in [SECURITY.md](SECURITY.md),
+including the ones that were embarrassing.
 
 ## What's next (the workflow)
 See [WORKFLOW.md](WORKFLOW.md) — the phased build to a live mesh, and the gitlawb/openclaude integration.
 
 ## Rules (same as every project here)
-Private until Phil opens it · descriptor-only (no keys, no autonomous send) · MainStreet is the oracle,
-separate · testnet/local until any on-chain step is gated. License: to be set by Phil.
+**Public**, MIT (see `package.json`) · descriptor-only (no keys, no autonomous send) · MainStreet is the
+oracle, separate · testnet/local until any on-chain step is gated.

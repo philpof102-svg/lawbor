@@ -145,6 +145,36 @@ const down = async () => { throw new Error('mainstreet 503'); };
     assert.equal(asked, 0, 'authentication runs BEFORE the reputation lookup — no oracle call is wasted on a stranger');
   });
 
+  /* ---- defects found by an adversarial panel on 2026-07-18, each reproduced before fixing ----- */
+
+  await t('TOCTOU: the same envelope over two gossip paths in one tick delivers ONCE', async () => {
+    const slow = async () => { await new Promise((r) => setTimeout(r, 10)); return { decision: 'PROCEED', score: 80 }; };
+    const r = createRelay({ self: B, preflight: slow });
+    const env = mkEnv(A, B, 'deliver the work');
+    const [x, y] = await Promise.all([r.accept(env), r.accept(env)]);
+    assert.notEqual(x.action === 'deliver' && y.action === 'deliver', true, 'dedup must hold under concurrency');
+    assert.equal([x, y].filter((o) => o.action === 'deliver').length, 1);
+  });
+
+  await t('a REFUSED envelope does not burn its id — the sender can legitimately retry', async () => {
+    let n = 0;
+    const flaky = async () => { n++; if (n === 1) throw new Error('oracle down'); return { decision: 'PROCEED', score: 80 }; };
+    const r = createRelay({ self: B, preflight: flaky });
+    const env = mkEnv(A, B, 'retry me');
+    assert.equal((await r.accept(env)).action, 'drop');
+    assert.equal((await r.accept(env)).action, 'deliver', 'a transient oracle failure must not blacklist the id');
+  });
+
+  await t('viaHuman is COVERED by the id: a relay cannot forge a bot message into the human inbox', () => {
+    // node.js picks the store view from viaHuman, so an unsigned, uncovered viaHuman was a way to
+    // move an autonomous bot message into a person's inbox — undetectably. Both directions now fail.
+    const bot = buildEnvelope({ from: A, to: B, body: 'autonomous chatter', viaHuman: null }).envelope;
+    assert.equal(validateEnvelope({ ...bot, viaHuman: 'phil' }).ok, false, 'setting viaHuman is detected');
+    const human = buildEnvelope({ from: A, to: B, body: 'a person wrote this', viaHuman: 'phil' }).envelope;
+    assert.equal(validateEnvelope({ ...human, viaHuman: null }).ok, false, 'stripping viaHuman is detected');
+    assert.equal(validateEnvelope(bot).ok, true, 'and honest envelopes still validate');
+  });
+
   console.log(`\n${pass} passed · ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

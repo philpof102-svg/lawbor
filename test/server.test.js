@@ -130,6 +130,35 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     assert.deepEqual(botA.node.peers(), botA.mesh.addrs(), 'relay and transport read ONE book');
   });
 
+  /* ---- the MCP surface must be reachable OVER HTTP -------------------------------------------
+   * Both routes returned 500 "mcpDispatch is not defined" for weeks: server.js never required
+   * ./mcp. The suite missed it because test/mcp.test.js imports ../mcp directly and never went
+   * through the server. A discovery card advertising tools that 500 is a false capability claim
+   * aimed at AGENTS, which makes it worse than a broken page. These go through fetch on purpose. */
+  await t('POST /mcp answers tools/list over HTTP (not just via a direct import)', async () => {
+    const r = await post(urlA, '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    assert.equal(r.status, 200);
+    assert.ok(Array.isArray(r.body.result.tools) && r.body.result.tools.length >= 6);
+    assert.ok(r.body.result.tools.some((x) => x.name === 'lawbor_whoami'));
+  });
+
+  await t('POST /mcp initialize + a real tool call both work over HTTP', async () => {
+    const init = await post(urlA, '/mcp', { jsonrpc: '2.0', id: 1, method: 'initialize' });
+    assert.equal(init.body.result.protocolVersion, '2024-11-05');
+    const call = await post(urlA, '/mcp', { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'lawbor_whoami', arguments: {} } });
+    assert.equal(call.status, 200);
+    assert.ok(!call.body.error, 'whoami must not error: ' + JSON.stringify(call.body.error));
+  });
+
+  await t('GET /.well-known/mcp.json serves a real card, and every tool it lists exists', async () => {
+    const r = await get(urlA, '/.well-known/mcp.json');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.mcp.transport, 'streamable-http');
+    const listed = r.body.tools.map((x) => x.name);
+    const live = (await post(urlA, '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' })).body.result.tools.map((x) => x.name);
+    assert.deepEqual(listed.sort(), live.sort(), 'the card must not advertise tools the server does not have');
+  });
+
   botA.server.close(); botB.server.close();
   for (const f of [dbA, dbB]) { try { fs.unlinkSync(f); } catch {} }
 

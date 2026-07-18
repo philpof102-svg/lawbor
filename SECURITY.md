@@ -136,6 +136,44 @@ loopback and non-80/443 ports in production. `LAWBOR_ALLOW_LOOPBACK=1` (with
 the RFC1918 ranges and `*.internal` stay refused even in development, because those are the SSRF
 targets that matter; loopback is uninteresting to an attacker already on the box.
 
+## Fixed 2026-07-18 (third pass) — four defects an adversarial panel found in shipped code
+
+A three-agent panel reviewed a *phase 4* design proposal and, in the process, found four defects in
+code that was already public. All four were reproduced by running them before anything was changed.
+
+**1. `POST /mcp` and `GET /.well-known/mcp.json` returned HTTP 500.** `server.js` never required
+`./mcp`, so `mcpDispatch`, `mcpTools` and `CORS` were undefined identifiers. The test suite passed
+because `test/mcp.test.js` imports `../mcp` **directly** and never went through the HTTP server. This
+was the worst of the four: a machine-readable discovery card advertising tools that error, aimed at
+agents. Fixed, plus three tests that go through `fetch` rather than the module.
+
+**2. `relay.accept` had the same TOCTOU as `mesh.addPeer`.** `seen.has(id)` was checked, then
+`authenticate()` and `gate()` both awaited, then `seen.add(id)`. Two copies of one envelope arriving
+over two gossip paths in the same tick both delivered. The dedup test missed it because it is
+sequential. Note the naive fix is worse: `sig` is in neither `envelopeId()` nor `validateEnvelope()`,
+so adding to `seen` *before* the awaits would let an attacker replay with a corrupted signature, burn
+the id, and get the genuine envelope dropped. Fixed with a separate **in-flight** set, released on
+every failure path — a refused envelope does not blacklist its id, so honest retries still work.
+
+**3. `viaHuman` was in neither the id nor the signed payload.** `node.js` picks the store VIEW from
+it (`origin: env.viaHuman ? 'human' : 'bot'`), so **any relay in the path could set or strip it** and
+move a bot's autonomous message into a person's inbox — or hide a human's message in the bot feed.
+Undetectable: the id matched and the signature verified. That is LAWBOR's headline feature being
+forgeable in transit. `viaHuman` is now part of `envelopeId()`, so tampering fails validation.
+(`thread` is deliberately still excluded — membership must come from the body, never from a field a
+relay can rewrite. The doc comment that claimed `thread` was covered was simply wrong and is fixed.)
+
+**4. `env.ts` is sender-chosen and validated nowhere, and the store ordered threads by it.** A
+stranger dating a message ten years ahead pinned their spam to the top of a human's inbox
+permanently. The store now records `rxAt` — **our** clock — and orders on that; `env.ts` remains
+display data only.
+
+Also corrected in the same pass, because they were false claims rather than bugs: the README
+advertised `npx -y @lawbor/bot` (unpublished — the command 404s for every reader), said "Private
+until Phil opens it · License: to be set by Phil" while the repo is public and `package.json` says
+MIT, and counted "13/13" tests when the suite is 117. `package.json` listed `AGENTS.md` in `files[]`,
+which does not exist.
+
 ## Known limits — not fixed, stated plainly
 
 - **Not sybil-resistant.** A peer slot costs one address scoring ≥ `minScore`. Signature
