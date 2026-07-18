@@ -1,0 +1,237 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>LAWBOR</title>
+<style>
+  /* The pod is a floating object, not a page: the window is transparent, this card is the whole UI. */
+  :root {
+    --bg: #0b0d0e; --card: #121516; --line: #23282a; --ink: #e7ecea; --dim: #7d8a86;
+    --bot: #6ee7a8;        /* autonomous = the bot spoke. one colour, used nowhere else. */
+    --human: #e7ecea;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  /* A bare `hidden` attribute is display:none from the UA sheet — which ANY element rule with a
+     display beats. footer{display:flex} silently un-hid the composer on the thread list. */
+  [hidden] { display: none !important; }
+  html, body { height: 100%; background: transparent; overflow: hidden;
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink); }
+
+  /* ---- MINI state: the "organic floating object" on the desktop ------------------------------ */
+  /* Driven purely by window width, so main.cjs only has to resize — no state to keep in sync. */
+  #orb { display: none; }
+  @media (max-width: 160px) {
+    #app { display: none; }
+    #orb { display: grid; place-items: center; width: 100vw; height: 100vh; cursor: pointer;
+           -webkit-app-region: drag; }
+    #orb .disc { width: 84%; height: 84%; border-radius: 50%; display: grid; place-items: center;
+      background: radial-gradient(circle at 32% 28%, #1b2422, #0b0d0e 70%);
+      border: 1px solid var(--line); box-shadow: 0 8px 28px #000a; -webkit-app-region: no-drag; }
+    #orb .mark { font-size: 17px; letter-spacing: .5px; color: var(--bot); }
+    #orb .badge { position: absolute; top: 12%; right: 12%; min-width: 18px; height: 18px; padding: 0 5px;
+      border-radius: 9px; background: var(--bot); color: #06120c; font-size: 11px; font-weight: 700;
+      display: none; place-items: center; }
+    #orb .badge[data-on] { display: grid; }
+  }
+
+  /* ---- EXPANDED state ------------------------------------------------------------------------ */
+  #app { height: 100vh; display: flex; flex-direction: column;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  header { -webkit-app-region: drag; display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  header .mark { color: var(--bot); }
+  header .self { color: var(--dim); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header button { -webkit-app-region: no-drag; background: none; border: 0; color: var(--dim);
+    cursor: pointer; font: inherit; padding: 2px 6px; border-radius: 4px; }
+  header button:hover { color: var(--ink); background: #ffffff10; }
+
+  nav { display: flex; border-bottom: 1px solid var(--line); }
+  nav button { flex: 1; background: none; border: 0; border-bottom: 2px solid transparent;
+    color: var(--dim); font: inherit; padding: 7px 4px; cursor: pointer; }
+  nav button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--bot); }
+
+  main { flex: 1; overflow-y: auto; }
+  .row { padding: 9px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .row:hover { background: #ffffff08; }
+  .row .top { display: flex; gap: 8px; align-items: baseline; }
+  .row .with { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .when, .row .count { color: var(--dim); font-size: 11px; }
+  .row .prev { color: var(--dim); font-size: 12px; margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row[data-auto] .with::before { content: "◇ "; color: var(--bot); }
+
+  .bub { padding: 7px 10px; }
+  .bub .who { font-size: 11px; color: var(--dim); }
+  .bub[data-side="out"] { text-align: right; }
+  .bub[data-origin="bot"] .who { color: var(--bot); }
+  .bub .body { white-space: pre-wrap; word-break: break-word; }
+
+  .empty, .err { padding: 16px 12px; color: var(--dim); font-size: 12px; }
+  .err { color: #f0a; }
+
+  footer { border-top: 1px solid var(--line); padding: 7px; display: flex; gap: 6px; background: var(--bg); }
+  footer input { flex: 1; min-width: 0; background: #0000; border: 1px solid var(--line);
+    border-radius: 6px; color: var(--ink); font: inherit; padding: 6px 8px; }
+  footer input:focus { outline: none; border-color: var(--bot); }
+  footer button { background: var(--bot); border: 0; border-radius: 6px; color: #06120c;
+    font: inherit; font-weight: 700; padding: 6px 10px; cursor: pointer; }
+  footer button:disabled { opacity: .4; cursor: default; }
+  .note { padding: 5px 10px; font-size: 11px; color: var(--dim); border-top: 1px solid var(--line); }
+</style>
+
+<div id="orb" title="LAWBOR — click to open"><div class="disc"><span class="mark">{°·°}</span></div><span class="badge" id="orbBadge"></span></div>
+
+<div id="app">
+  <header>
+    <span class="mark">{°·°}</span>
+    <span class="self" id="self">connecting…</span>
+    <button id="back" title="back" hidden>←</button>
+    <button id="min" title="minimise to the desktop">─</button>
+    <button id="quit" title="quit">×</button>
+  </header>
+
+  <nav>
+    <button id="tabInbox" aria-selected="true">inbox</button>
+    <button id="tabBot" aria-selected="false">watch my bot</button>
+  </nav>
+
+  <main id="main"><div class="empty">loading…</div></main>
+
+  <footer id="composer" hidden>
+    <input id="msg" placeholder="message…" autocomplete="off">
+    <button id="send">send</button>
+  </footer>
+  <div class="note" id="note">descriptor-only · your bot relays · nothing signs here</div>
+</div>
+
+<script>
+// The panel is deliberately dumb: it renders what the node returns and never derives trust facts
+// on its own. All mapping goes through window.lawbor.view (the same module the tests exercise).
+const L = window.lawbor;
+const $ = (id) => document.getElementById(id);
+const main = $('main');
+let self = '';
+let view = 'inbox';      // 'inbox' | 'bot'
+let open = null;         // opened thread id, or null for the list
+let peer = null;         // counterparty of the opened thread, for the composer
+
+/** Every piece of user/peer data reaches the DOM through textContent. Never innerHTML with a body. */
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+function show(nodes) { main.replaceChildren(...nodes); }
+function fail(e) { show([el('div', 'err', String(e && e.message || e))]); }
+
+async function paintList() {
+  $('back').hidden = true; $('composer').hidden = true;
+  try {
+    const r = view === 'bot' ? await L.botActivity() : await L.inbox();
+    const now = Date.now();
+    const rows = (r.threads || []).map((t) => L.view.threadRow(t, self, view, now));
+    updateBadge(rows.length);
+    if (!rows.length) {
+      show([el('div', 'empty', view === 'bot'
+        ? 'your bot has not talked to anyone yet.'
+        : 'no conversations yet. add a peer, then send a message.')]);
+      return;
+    }
+    show(rows.map((row) => {
+      const d = el('div', 'row');
+      if (row.autonomous) d.dataset.auto = '1';
+      const top = el('div', 'top');
+      top.append(el('span', 'with', row.with), el('span', 'count', row.count + ''), el('span', 'when', row.when));
+      d.append(top, el('div', 'prev', row.preview));
+      d.onclick = () => { open = row.id; peer = row.with; paintThread(); };
+      return d;
+    }));
+  } catch (e) { fail(e); }
+}
+
+async function paintThread() {
+  $('back').hidden = false;
+  // The composer only appears on a HUMAN thread: the bot feed is a window onto autonomous
+  // conversations, not a place to inject yourself mid-negotiation.
+  $('composer').hidden = view === 'bot';
+  try {
+    const r = await L.thread(open);
+    const bubbles = (r.messages || []).map((m) => L.view.bubble(m, self));
+    if (!bubbles.length) return show([el('div', 'empty', 'empty thread.')]);
+    show(bubbles.map((b) => {
+      const d = el('div', 'bub');
+      d.dataset.side = b.side; d.dataset.origin = b.origin;
+      let who = b.who;
+      if (b.origin === 'bot') who += ' · bot';
+      if (b.viaHuman) who += ' · via ' + L.view.shortAddr(b.viaHuman);
+      if (b.score !== null) who += ' · score ' + b.score;
+      d.append(el('div', 'who', who), el('div', 'body', b.body));
+      return d;
+    }));
+    main.scrollTop = main.scrollHeight;
+  } catch (e) { fail(e); }
+}
+
+// The badge is the number of CONVERSATIONS in the current view — not unread messages. The store
+// has no read/unread concept at all, so a "3 unread" badge would be a number we made up.
+function updateBadge(n) {
+  const b = $('orbBadge');
+  $('orb').title = 'LAWBOR — ' + n + ' conversation' + (n === 1 ? '' : 's') + ' · click to open';
+  if (n > 0) { b.textContent = n > 99 ? '99+' : String(n); b.dataset.on = '1'; }
+  else { b.removeAttribute('data-on'); }
+}
+
+function setView(v) {
+  view = v; open = null;
+  $('tabInbox').setAttribute('aria-selected', String(v === 'inbox'));
+  $('tabBot').setAttribute('aria-selected', String(v === 'bot'));
+  paintList();
+}
+
+async function send() {
+  const input = $('msg');
+  const text = input.value.trim();
+  if (!text || !peer) return;
+  $('send').disabled = true;
+  try {
+    const r = await L.say(peer, text, open);
+    input.value = '';
+    // Honest feedback: the relay can refuse (peer below the score floor, or the oracle is
+    // unreachable and we fail CLOSED). Saying "sent" then would be a lie.
+    $('note').textContent = r.delivered
+      ? 'relayed · descriptor-only'
+      : 'not delivered — ' + (r.reason || 'gated by reputation');
+    await paintThread();
+  } catch (e) { $('note').textContent = 'failed — ' + e.message; }
+  finally { $('send').disabled = false; }
+}
+
+$('tabInbox').onclick = () => setView('inbox');
+$('tabBot').onclick = () => setView('bot');
+$('back').onclick = () => { open = null; paintList(); };
+$('min').onclick = () => L.win('collapse');
+$('quit').onclick = () => L.win('quit');
+$('orb').onclick = () => L.win('expand');
+$('send').onclick = send;
+$('msg').onkeydown = (e) => { if (e.key === 'Enter') send(); };
+
+(async function boot() {
+  // If the preload never ran, L is undefined — and an error path that dereferences L would throw
+  // AGAIN inside its own catch, leaving the panel frozen on "loading…" with no clue why. Check the
+  // bridge first, and say plainly what is broken.
+  if (!L || !L.view) {
+    $('self').textContent = 'bridge missing';
+    return show([el('div', 'err', 'the preload bridge did not load — run this through desktop/main.cjs, not by opening the file')]);
+  }
+  try {
+    const h = await L.health();
+    self = h.self || '';
+    $('self').textContent = L.view.shortAddr(self) + ' · ' + h.peers + ' peer' + (h.peers === 1 ? '' : 's');
+  } catch (e) {
+    $('self').textContent = 'node unreachable';
+    return fail(new Error('no bot node at ' + L.base + ' — start it, or set LAWBOR_NODE_URL'));
+  }
+  paintList();
+  // Poll while collapsed too (backgroundThrottling is off), so the orb badge stays live.
+  setInterval(() => { if (!open) paintList(); }, 8000);
+})();
+</script>
