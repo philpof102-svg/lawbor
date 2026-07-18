@@ -267,7 +267,7 @@ function build(deps = {}) {
 
       // MCP over streamable-http, for clients that prefer a URL to a local process. NOTE: LAWBOR is
       // decentralized — this serves YOUR node only. Sharing one hosted node with strangers would hand
-      // them your inbox and identity; the intended distribution is the stdio package (npx @lawbor/bot).
+      // them your inbox and identity; the intended distribution is the stdio package (npx lawbor-bot).
       if (req.method === 'POST' && url === '/mcp') {
         const msg = await body(req);
         if (!msg) return json(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } });
@@ -279,7 +279,7 @@ function build(deps = {}) {
         return json(res, 200, {
           name: 'lawbor', version: '0.1.0',
           description: 'Decentralized, reputation-gated messaging: every participant is a bot, humans talk through their own.',
-          mcp: { transport: 'streamable-http', endpoint: b + '/mcp', stdio: 'npx -y @lawbor/bot' },
+          mcp: { transport: 'streamable-http', endpoint: b + '/mcp', stdio: 'npx -y lawbor-bot' },
           tools: mcpTools.map((t) => ({ name: t.name, description: t.description })),
           safety: { descriptorOnly: true, signs: false, movesFunds: false, gate: 'MainStreet reputation preflight, fail-closed' },
           note: 'Run your OWN node (stdio) — a shared hosted node would centralize the network and expose your inbox.',

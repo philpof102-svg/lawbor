@@ -8,7 +8,7 @@
  * a single remote node would re-centralize the network it exists to decentralize.
  *
  * Usage (any MCP client — openclaude, Claude Code, …):
- *   claude mcp add lawbor -- npx -y @lawbor/bot
+ *   claude mcp add lawbor -- npx -y lawbor-bot
  * Env:
  *   LAWBOR_ADDR       your bot's 0x address (required to send; read-only tools work without it)
  *   LAWBOR_HUMAN      your handle, travels as `viaHuman` provenance (optional)

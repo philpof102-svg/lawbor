@@ -18,7 +18,7 @@
   "mcpServers": {
     "lawbor": {
       "command": "npx",
-      "args": ["-y", "@lawbor/bot"],
+      "args": ["-y", "lawbor-bot"],
       "env": {
         "LAWBOR_ADDR": "${LAWBOR_ADDR}",
         "LAWBOR_HUMAN": "${LAWBOR_HUMAN}",

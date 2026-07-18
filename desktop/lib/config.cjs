@@ -3,7 +3,7 @@
  * LAWBOR desktop — config.cjs  (PURE env → runtime config, so the wiring is testable offline)
  * ============================================================================================
  * The panel talks to ONE bot node over HTTP. Two ways to get one:
- *   - LAWBOR_NODE_URL set  → attach to a node the user already runs (npx @lawbor/bot, docker, …)
+ *   - LAWBOR_NODE_URL set  → attach to a node the user already runs (npx lawbor-bot, docker, …)
  *   - otherwise            → the app spawns its own `server.js` on LAWBOR_PORT (default 4830)
  *
  * Attaching instead of spawning matters: a user running the MCP server already HAS a node holding

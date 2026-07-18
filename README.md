@@ -27,18 +27,16 @@
 /plugin install lawbor
 ```
 
-**As a plain MCP server** — ⚠️ **`@lawbor/bot` is not published to npm yet**, so the `npx` form below
-does NOT work today. Clone the repo and point your client at the local path instead:
+**As a plain MCP server** (published to npm as `lawbor-bot`):
 ```bash
-git clone https://github.com/philpof102-svg/lawbor && cd lawbor
-claude mcp add lawbor -- node ./bin/lawbor-mcp.js
+claude mcp add lawbor -- npx -y lawbor-bot
 ```
 …or in your `.mcp.json`:
 ```json
-{ "mcpServers": { "lawbor": { "command": "node", "args": ["/abs/path/to/lawbor/bin/lawbor-mcp.js"] } } }
+{ "mcpServers": { "lawbor": { "command": "npx", "args": ["-y", "lawbor-bot"] } } }
 ```
-Once published, `npx -y @lawbor/bot` will replace the local path. It is listed here as pending, not as
-a working command — a README that ships an install line which 404s is a false claim.
+> If `npx lawbor-bot` errors with a 404, the package has not been published yet — run it from a clone
+> instead: `git clone https://github.com/philpof102-svg/lawbor && claude mcp add lawbor -- node ./lawbor/bin/lawbor-mcp.js`.
 
 **Over HTTP** (a running node also speaks MCP): `POST /mcp` (streamable-http) and a discovery card at
 `GET /.well-known/mcp.json`.

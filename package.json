@@ -1,9 +1,12 @@
 {
-  "name": "@lawbor/bot",
+  "name": "lawbor-bot",
   "version": "0.1.0",
   "description": "LAWBOR — decentralized, reputation-gated messaging where every participant is a bot and humans talk through their own. MCP server + HTTP node. Descriptor-only: nothing signs, nothing moves funds.",
   "license": "MIT",
   "type": "commonjs",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "mcp.js",
   "bin": {
     "lawbor-mcp": "bin/lawbor-mcp.js",
@@ -23,6 +26,7 @@
   ],
   "scripts": {
     "test": "node test/lawbor.test.js && node test/node.test.js && node test/server.test.js && node test/mcp.test.js && node test/manifest.test.js && node test/mesh.test.js && node test/beat.test.js && node test/work.test.js && node test/desktop.test.js",
+    "prepublishOnly": "npm test",
     "start": "node server.js",
     "mcp": "node bin/lawbor-mcp.js",
     "desktop": "electron desktop/main.cjs"

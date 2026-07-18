@@ -33,10 +33,10 @@ t('plugin.json: mcpServers is a record of server-name → config with command+ar
   const s = plugin.mcpServers.lawbor;
   assert.ok(s, 'the lawbor server entry exists');
   assert.equal(s.command, 'npx');
-  assert.ok(Array.isArray(s.args) && s.args.includes('@lawbor/bot'));
+  assert.ok(Array.isArray(s.args) && s.args.includes('lawbor-bot'));
 });
 t('plugin.json: the npx package matches what package.json actually publishes', () => {
-  assert.equal(pkg.name, '@lawbor/bot');
+  assert.equal(pkg.name, 'lawbor-bot');
   assert.ok(pkg.bin && pkg.bin['lawbor-mcp'], 'the stdio entry point is declared as a bin');
 });
 t('marketplace.json: source is {source:"github", repo}, name matches the plugin name', () => {
