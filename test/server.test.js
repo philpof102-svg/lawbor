@@ -128,6 +128,19 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     }
   });
 
+  await t('blocking gives a block a NETWORK effect: a blocked peer is not gossiped, but its relay is untouched', async () => {
+    const { buildEnvelope } = require('../lib/envelope');
+    // B is A's peer here. A vouches for B in peer-exchange...
+    assert.ok((await get(urlA, '/lawbor/peers')).body.peers.some((p) => p.addr.toLowerCase() === B.toLowerCase()), 'B is gossiped before the block');
+    assert.equal((await post(urlA, '/block', { addr: B })).status, 200);
+    // ...after blocking B, A stops recommending B to others (a widely-blocked addr falls out of discovery)
+    assert.ok(!(await get(urlA, '/lawbor/peers')).body.peers.some((p) => p.addr.toLowerCase() === B.toLowerCase()), 'B is NOT gossiped after the block');
+    // ...but A still RELAYS B's traffic to third parties — a block is CONTACT, not network censorship
+    const fwd = await botA.node.relay.accept(buildEnvelope({ from: B, to: '0x' + 'cc'.repeat(20), body: 'route me' }).envelope);
+    assert.equal(fwd.action, 'forward', 'relay of a blocked sender is deliberately unaffected — else a personal block censors the mesh');
+    await post(urlA, '/unblock', { addr: B });   // restore state for any later assertions
+  });
+
   await t('the relay no longer keeps its own peerbook — addPeer is refused when delegated', () => {
     assert.equal(botA.node.relay.addPeer('0x' + 'ee'.repeat(20)), false,
       'an ungated side-door into the peer set must not exist');

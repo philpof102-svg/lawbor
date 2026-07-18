@@ -134,6 +134,15 @@ function build(deps = {}) {
       throw e;
     }
   };
+  /* Peer gossip must not vouch for someone you've blocked. sharePeers() suppresses blocked addresses
+   * from what this node RECOMMENDS to others (GET /lawbor/peers + the heartbeat offer). This gives a
+   * block a network effect: a widely-blocked address falls out of the discovery graph, no central
+   * moderator needed. It is the ONLY block effect on the mesh — a block is CONTACT, not censorship:
+   * relaying a blocked sender's traffic to third parties is deliberately UNAFFECTED (see relay.accept
+   * forward path), because filtering that would let a personal block list censor the whole network.
+   * mesh.js stays pure (no consent knowledge); the filter lives here, at the boundary gossip exits. */
+  const sharePeers = (n) => { const { blocked } = store.control(); return mesh.sample(n).filter((p) => !blocked.has(String(p.addr).toLowerCase())); };
+
   // Signature verification is injected (node ships no ecrecover/keccak, and LAWBOR has zero deps).
   // With neither a verifier nor the explicit opt-in, the relay refuses inbound envelopes rather than
   // scoring an address the sender merely typed. See lib/relay.js::authenticate.
@@ -183,7 +192,7 @@ function build(deps = {}) {
         const target = beat.offerTarget(mesh.addrs(), tick, { everyNTicks: o.everyNTicks || 5 });
         if (target) {
           const url = mesh.urlFor(target);
-          const sample = mesh.sample(3);
+          const sample = sharePeers(3);
           if (url && sample.length) {
             try {
               await doFetch(url.replace(/\/$/, '') + '/lawbor/offer', {
@@ -229,7 +238,7 @@ function build(deps = {}) {
         return json(res, 200, r);
       }
       // What WE will disclose in return: a bounded, non-transitive sample. Never the full table.
-      if (req.method === 'GET' && url === '/lawbor/peers') return json(res, 200, { peers: mesh.sample(3) });
+      if (req.method === 'GET' && url === '/lawbor/peers') return json(res, 200, { peers: sharePeers(3) });
 
       if (req.method === 'POST' && url === '/say') { const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.say(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason }); }
       if (req.method === 'POST' && url === '/bot/say') { const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.botSay(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, delivered: r.delivered }); }
