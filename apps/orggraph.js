@@ -41,6 +41,9 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
   .dimmed{ opacity:.16 } .traced rect.node{ stroke-width:3 }
   .pulse{ animation:p .6s ease } @keyframes p{ from{ opacity:.35 } to{ opacity:1 } }
   .empty{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--dim); padding:20px; text-align:center }
+  /* a class selector beats the UA [hidden]{display:none}, so display:flex above would keep the empty
+     state VISIBLE behind a drawn graph. Caught by looking at the page, not by asserting el.hidden. */
+  .empty[hidden]{ display:none }
   #panel{ position:absolute; right:14px; top:14px; width:250px; background:var(--panel); border:1px solid var(--line);
           border-radius:10px; padding:12px 14px; font-size:12px; display:none }
   #panel h3{ margin:0 0 6px; font-size:13px } #panel .row{ display:flex; justify-content:space-between; gap:10px; padding:2px 0; color:var(--dim) }
