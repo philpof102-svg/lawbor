@@ -203,8 +203,8 @@ primitive. Pinned by 13 checks in `test/consent.test.js`.
 **Deferred (named, not built):** the paid "permanent job post" board — an adversarial panel returned
 *do-not-build*: a permanent, publicly-discoverable, chargeable listing IS the shared hosted endpoint
 this project refuses (it re-centralizes, hands one operator the whole demand graph, is forkable under
-MIT, and "permanent" is already the free default). Still deferred: message delete/purge tombstones (a
-victim still cannot remove an already-stored body).
+MIT, and "permanent" is already the free default). *(Message delete/purge tombstones — once deferred
+here — are now built; see "retention + delete" below.)*
 
 ## Added 2026-07-18 — DoS hardening: inbound rate-limit + a store index
 
@@ -222,9 +222,32 @@ Two flooding surfaces named in the deferred list are now closed.
   authoritative and testable. Pinned by tests (capped-then-resumes, and the cache reflects a
   just-recorded message).
 
-Still open: **retention cap / compaction** (the index bounds CPU, not memory — a very long-lived node
-still holds its whole log in RAM), and **delete tombstones**. Both are follow-ups, kept out of this
-pass to hold one guarantee per change.
+*(Retention cap / compaction and delete tombstones — named here as still-open — are built in the next
+section.)*
+
+## Added 2026-07-18 — retention + delete: bound RAM, and scrub a stored body
+
+The two follow-ups named just above are now closed, with tests in `test/consent.test.js`.
+
+- **Delete tombstones.** `store.deleteMsg(id)` (exposed as `POST /delete {id}`, an operator-local
+  control like `/block`) retires an already-stored message. A delete is itself an append —
+  `{id, deleted:true}` — so the log stays append-only; `readAll` resolves it last-write-wins and hides
+  the body. The tombstone is **sticky**: because `envelopeId` is deterministic, a harasser resending
+  the identical envelope produces the same id, and it stays hidden rather than reappearing. Warm-cache
+  and cold-read paths are kept in lockstep (an in-memory `deletedIds` set mirrors `readAll`), so a
+  restart doesn't resurrect a deleted body. **`block` stops future messages; `deleteMsg` scrubs one
+  already stored** — two different needs, two primitives.
+- **Retention cap / compaction.** `store.compact()` rewrites the log to `maxMessages` newest and/or
+  `maxAgeMs` window, physically dropping tombstoned + superseded rows — the only op that shrinks the
+  file, and the only one that makes a deleted body actually leave the disk. It bounds **RAM as well as
+  disk**, since the index now holds the whole log. Wired via `LAWBOR_MAX_MESSAGES` / `LAWBOR_MAX_AGE_DAYS`
+  (compact once at boot) and `LAWBOR_COMPACT_EVERY` (auto-compact every N records, so a busy node stays
+  bounded with no external scheduler). Default is **unbounded** — opt-in, so an operator who wants full
+  history keeps it. The rewrite is temp-file + `rename` (atomic replace on Windows and POSIX), so a
+  crash mid-compact leaves the prior log intact.
+- **Honest limit:** compaction *forgets* the tombstones it purges (the body is gone — the point). A
+  still-active harasser is a job for `block` (permanent in the control log), not repeated deletes.
+  Compaction is single-writer, like `record()` — a node compacts its own store, in-process.
 
 ## Known limits — not fixed, stated plainly
 

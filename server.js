@@ -101,7 +101,18 @@ async function fetchDiscoveryCard(url, doFetch, opts = {}) {
 
 /** Build the server. deps.preflight / deps.fetch / deps.verify injectable for tests (no network). */
 function build(deps = {}) {
-  const store = deps.store || createStore();
+  // Retention (opt-in, unbounded by default): LAWBOR_MAX_MESSAGES caps live rows, LAWBOR_MAX_AGE_DAYS
+  // caps age, LAWBOR_COMPACT_EVERY auto-compacts every N stored messages. Bounds disk AND RAM (the index).
+  const retention = {
+    maxMessages: Number(process.env.LAWBOR_MAX_MESSAGES) || 0,
+    maxAgeMs: (Number(process.env.LAWBOR_MAX_AGE_DAYS) || 0) * 86_400_000,
+    compactEvery: Number(process.env.LAWBOR_COMPACT_EVERY) || 0,
+  };
+  const store = deps.store || createStore(undefined, undefined, retention);
+  // Compact once at boot so a node that has been down keeps its restart bounded, not just steady-state.
+  if ((retention.maxMessages || retention.maxAgeMs) && typeof store.compact === 'function') {
+    try { const r = store.compact(); if (r.removed) console.log(`[lawbor] compacted store: dropped ${r.removed}, kept ${r.kept}`); } catch {}
+  }
   const doFetch = deps.fetch || (typeof fetch !== 'undefined' ? fetch : null);
   const self = deps.self || SELF;
   // Development escape: loopback ONLY (never the rest of the private space — see lib/mesh.js).
@@ -320,6 +331,8 @@ function build(deps = {}) {
       if (req.method === 'POST' && url === '/block') { const a = await body(req) || {}; if (!a.addr) return json(res, 400, { error: 'addr required' }); return json(res, 200, node.block(a.addr)); }
       if (req.method === 'POST' && url === '/unblock') { const a = await body(req) || {}; if (!a.addr) return json(res, 400, { error: 'addr required' }); return json(res, 200, node.unblock(a.addr)); }
       if (req.method === 'POST' && url === '/accept') { const a = await body(req) || {}; if (!a.addr) return json(res, 400, { error: 'addr required' }); return json(res, 200, node.accept(a.addr)); }
+      // Local delete — remove an ALREADY-STORED body (block only stops future ones). Operator-local, like block.
+      if (req.method === 'POST' && url === '/delete') { const a = await body(req) || {}; if (!a.id) return json(res, 400, { error: 'id required' }); return json(res, 200, node.deleteMsg(a.id)); }
       if (req.method === 'GET' && url === '/thread') { const id = q.get('id'); if (!id) return json(res, 400, { error: 'id required' }); return json(res, 200, { thread: id, messages: store.thread(id) }); }
 
       if (req.method === 'POST' && url === '/lawbor/accept') { const a = await body(req) || {}; if (!a.envelope) return json(res, 400, { error: 'envelope required' }); const r = await node.receive(a.envelope); return json(res, r.action === 'drop' ? 202 : 200, { action: r.action, reason: r.reason || null }); }
@@ -356,7 +369,7 @@ function build(deps = {}) {
         if (r) return json(res, r.status, r.body, r.headers);
       }
 
-      return json(res, 404, { error: 'GET /health,/inbox,/requests,/bot-activity,/thread,/jobs,/apps,/app/<name>/... · POST /say,/bot/say,/block,/unblock,/accept,/work,/x402/settle,/lawbor/*,/peers' });
+      return json(res, 404, { error: 'GET /health,/inbox,/requests,/bot-activity,/thread,/jobs,/apps,/app/<name>/... · POST /say,/bot/say,/block,/unblock,/accept,/delete,/work,/x402/settle,/lawbor/*,/peers' });
     } catch (e) { return json(res, 500, { error: e.message }); }
   });
   return { server, node, mesh, startHeartbeat, stopHeartbeat };

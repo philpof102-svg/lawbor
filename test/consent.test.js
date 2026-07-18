@@ -195,6 +195,59 @@ const inBot = (from, body) => buildEnvelope({ from, to: A, body, viaHuman: null 
     assert.equal(s.countRecentFrom(S, 0), 1, 'countRecentFrom reads the same cache');
   });
 
+  // ---- DoS hardening #2: delete tombstones + retention compaction ----------------------------
+  await t('DELETE: a tombstone removes an already-stored body and is STICKY against redelivery', () => {
+    const b = path.join(os.tmpdir(), 'lawbor-del-' + process.pid + '-' + (++n));
+    const s = createStore(b + '.jsonl', b + '.control');
+    const env = buildEnvelope({ from: S, to: A, body: 'harass', nonce: 'k', viaHuman: 'x' }).envelope;
+    s.record(env, { origin: 'human', dir: 'in' });
+    assert.equal(s.all().length, 1);
+    s.deleteMsg(env.id);
+    assert.equal(s.all().length, 0, 'the deleted body leaves the views (warm cache)');
+    s.record(env, { origin: 'human', dir: 'in' });            // identical envelope → same deterministic id
+    assert.equal(s.all().length, 0, 'a redelivered identical envelope stays hidden — the tombstone is sticky');
+    // cold read (fresh store over the same files) must agree with the warm path
+    const cold = createStore(b + '.jsonl', b + '.control');
+    assert.equal(cold.all().length, 0, 'cold readAll agrees: still deleted after a process restart');
+  });
+
+  await t('COMPACT: maxMessages keeps only the newest N live rows and drops tombstones from disk', () => {
+    const b = path.join(os.tmpdir(), 'lawbor-cap-' + process.pid + '-' + (++n));
+    const s = createStore(b + '.jsonl', b + '.control', { maxMessages: 2 });
+    let clk = 1000;
+    const put = (body) => s.record(buildEnvelope({ from: S, to: A, body, nonce: body, viaHuman: 'x' }).envelope, { origin: 'human', dir: 'in', rxAt: clk += 10 });
+    put('one'); put('two'); const three = put('three'); put('four');
+    s.deleteMsg(three.id);                                     // one tombstone in the mix
+    const r = s.compact();
+    assert.equal(r.kept, 2, 'kept the newest 2 live rows');
+    assert.ok(r.removed >= 3, 'dropped the 2 oldest + the tombstoned pair from disk');
+    // three was deleted, so the two newest LIVE rows are 'two' and 'four' (order-independent check):
+    assert.deepEqual(s.all().map((m) => m.body).sort(), ['four', 'two'], 'warm cache: the 2 newest live rows');
+    const cold = createStore(b + '.jsonl', b + '.control');
+    assert.deepEqual(cold.all().map((m) => m.body).sort(), ['four', 'two'], 'disk holds exactly the 2 newest live rows');
+  });
+
+  await t('COMPACT: maxAgeMs drops rows older than the window (on our clock)', () => {
+    const b = path.join(os.tmpdir(), 'lawbor-age-' + process.pid + '-' + (++n));
+    const s = createStore(b + '.jsonl', b + '.control', { maxAgeMs: 1000 });
+    s.record(buildEnvelope({ from: S, to: A, body: 'old', nonce: 'o', viaHuman: 'x' }).envelope, { origin: 'human', dir: 'in', rxAt: 1000 });
+    s.record(buildEnvelope({ from: S, to: A, body: 'new', nonce: 'w', viaHuman: 'x' }).envelope, { origin: 'human', dir: 'in', rxAt: 5000 });
+    const r = s.compact({ now: () => 5500 });                 // window floor = 4500 → 'old' (1000) is out
+    assert.equal(r.kept, 1);
+    assert.deepEqual(s.all().map((m) => m.body), ['new'], 'only the in-window row survived');
+  });
+
+  await t('AUTO-COMPACT: compactEvery bounds a busy store without a manual call', () => {
+    const b = path.join(os.tmpdir(), 'lawbor-auto-' + process.pid + '-' + (++n));
+    const s = createStore(b + '.jsonl', b + '.control', { maxMessages: 3, compactEvery: 4 });
+    let clk = 0;
+    // 12 records / compactEvery 4 → compaction lands on the last write, so the steady state is the cap.
+    for (let i = 0; i < 12; i++) s.record(buildEnvelope({ from: S, to: A, body: 'm' + i, nonce: 'm' + i, viaHuman: 'x' }).envelope, { origin: 'human', dir: 'in', rxAt: clk += 10 });
+    assert.equal(s.all().length, 3, 'auto-compaction held the store at the cap — got ' + s.all().length);
+    // between compactions it may drift, but never unbounded: at most maxMessages + compactEvery - 1
+    assert.ok(s.all().length <= 3 + 4 - 1, 'bounded even mid-stream');
+  });
+
   console.log(`\n${pass} passed · ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
