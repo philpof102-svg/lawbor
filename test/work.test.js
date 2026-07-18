@@ -3,7 +3,7 @@
 // tests are just "given these messages in this order, what is the job?".
 // Run: node test/work.test.js
 const assert = require('node:assert');
-const { buildWork, parseWork, foldThread, jobsFrom, mayApply } = require('../lib/work');
+const { buildWork, parseWork, foldThread, jobsFrom, graphOf, mayApply } = require('../lib/work');
 
 let pass = 0, fail = 0;
 const t = (n, fn) => { try { fn(); pass++; console.log('  ✓ ' + n); } catch (e) { fail++; console.log('  ✗ ' + n + '\n      ' + (e && e.message)); } };
@@ -168,6 +168,71 @@ t('no settlement anywhere: work.js never touches funds, and says so', () => {
   assert.ok(!/require\(/.test(src.replace(/^[\s\S]*?\*\//, '')), 'pure — no imports at all');
   assert.ok(!/transfer|approve|escrow|signTransaction|sendTransaction/i.test(src.split('module.exports')[0].replace(/\/\*[\s\S]*?\*\//g, '')));
   assert.match(src, /It is not a labour market, because no exchange occurs/);
+});
+
+// ---- dependency graph: jobs that wait on jobs (the agent-org coordination layer) -----------------
+console.log('\nLAWBOR work — dependency graph (help_wanted.dependsOn), readiness derived from awards:');
+
+t('a dependent job is BLOCKED (no bids) until its upstream is awarded', () => {
+  const msgs = [
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'build', task: 'build the artifact' })),
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'deploy', task: 'deploy it', dependsOn: ['build'] })),
+  ];
+  let jobs = foldThread(msgs);
+  assert.equal(jobs.get('deploy').ready, false, 'deploy blocked while build is un-awarded');
+  assert.deepEqual(jobs.get('deploy').blockedBy, ['build']);
+  // a worker cannot bid on the blocked job (accept-time gate)
+  assert.equal(mayApply(jobs.get('deploy'), 'bid', W2).ok, false, 'bid refused while blocked');
+  assert.equal(mayApply(jobs.get('deploy'), 'award', W2).ok, false, 'award refused while blocked');
+  assert.equal(jobs.get('build').ready, true, 'the upstream itself has no deps → ready');
+
+  // award the upstream → the dependent becomes ready and now takes bids
+  msgs.push(row(W1, REQ, buildWork('bid', { jobId: 'build', price: '10' })));
+  msgs.push(row(REQ, W1, buildWork('award', { jobId: 'build', worker: W1, price: '10' })));
+  jobs = foldThread(msgs);
+  assert.equal(jobs.get('deploy').ready, true, 'deploy ready once build is awarded');
+  assert.equal(mayApply(jobs.get('deploy'), 'bid', W2).ok, true, 'bid now allowed');
+});
+
+t('the graph rewrites itself: a child job appended at runtime is absorbed by the fold', () => {
+  const msgs = [
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'root', task: 'do the thing' })),
+    row(W1, REQ, buildWork('bid', { jobId: 'root', price: '5' })),
+    row(REQ, W1, buildWork('award', { jobId: 'root', worker: W1, price: '5' })),
+  ];
+  // the awarded worker spawns a sub-task that depends on root — no schema change, just another envelope
+  msgs.push(row(W1, W2, buildWork('help_wanted', { jobId: 'subtask', task: 'follow-up', dependsOn: ['root'] })));
+  const g = graphOf(msgs);
+  assert.ok(g.ready.includes('subtask'), 'subtask is ready (root awarded) — dynamic org grew a node');
+  assert.deepEqual(g.edges, [{ from: 'subtask', dependsOn: 'root' }]);
+  assert.deepEqual(g.roots, ['root'], 'root has no upstream');
+});
+
+t('a cancelled upstream leaves the dependent permanently blocked (not ready)', () => {
+  const jobs = foldThread([
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'a', task: 'A' })),
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'b', task: 'B', dependsOn: ['a'] })),
+    row(REQ, W1, buildWork('cancel', { jobId: 'a', reason: 'scrapped' })),
+  ]);
+  assert.equal(jobs.get('a').state, 'cancelled');
+  assert.equal(jobs.get('b').ready, false, 'B never becomes ready — its dep will never be awarded');
+});
+
+t('a dependency CYCLE leaves every job blocked, no crash/infinite loop', () => {
+  const jobs = foldThread([
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'x', task: 'X', dependsOn: ['y'] })),
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'y', task: 'Y', dependsOn: ['x'] })),
+  ]);
+  assert.equal(jobs.get('x').ready, false);
+  assert.equal(jobs.get('y').ready, false, 'mutual block, terminates');
+});
+
+t('buildWork strips a self-dependency and dedupes, and an unknown dep just blocks', () => {
+  const body = buildWork('help_wanted', { jobId: 'z', task: 'Z', dependsOn: ['z', 'up', 'up', 'ghost'] });
+  const w = parseWork(body);
+  assert.deepEqual(w.dependsOn, ['up', 'ghost'], 'self removed, dup collapsed');
+  const jobs = foldThread([row(REQ, W1, body)]);
+  assert.deepEqual(jobs.get('z').blockedBy, ['up', 'ghost'], 'unknown upstreams block until they exist+award');
 });
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

@@ -341,6 +341,14 @@ function build(deps = {}) {
         });
       }
 
+      // The agent-org GRAPH: nodes + dependency edges + the ready (claimable) frontier. Same blocked
+      // filter as /jobs. `ready` = deps satisfied means upstream AWARDED, not delivered (no execution here).
+      if (req.method === 'GET' && url === '/graph') {
+        const { blocked: gBlocked } = store.control();
+        const g = work.graphOf(store.all().filter((m) => !gBlocked.has(String(m.from).toLowerCase())));
+        return json(res, 200, { ...g, note: 'dependency = upstream awarded (a worker chosen), NOT delivered — LAWBOR models no execution' });
+      }
+
       if (req.method === 'GET' && url === '/inbox') return json(res, 200, { view: 'inbox', threads: store.inbox(node.self, Number(q.get('limit')) || 50) });
       if (req.method === 'GET' && url === '/requests') return json(res, 200, { view: 'requests', threads: store.requests(node.self, Number(q.get('limit')) || 50), note: 'first contact from unknown senders — reply or accept to move them to your inbox' });
       if (req.method === 'GET' && url === '/bot-activity') return json(res, 200, { view: 'bot-activity', threads: store.botActivity(node.self, Number(q.get('limit')) || 50) });
@@ -388,7 +396,7 @@ function build(deps = {}) {
         if (r) return json(res, r.status, r.body, r.headers);
       }
 
-      return json(res, 404, { error: 'GET /health,/inbox,/requests,/bot-activity,/thread,/jobs,/apps,/app/<name>/... · POST /say,/bot/say,/block,/unblock,/accept,/delete,/work,/x402/settle,/lawbor/*,/peers' });
+      return json(res, 404, { error: 'GET /health,/inbox,/requests,/bot-activity,/thread,/jobs,/graph,/apps,/app/<name>/... · POST /say,/bot/say,/block,/unblock,/accept,/delete,/work,/x402/settle,/lawbor/*,/peers' });
     } catch (e) { return json(res, 500, { error: e.message }); }
   });
   return { server, node, mesh, startHeartbeat, stopHeartbeat };
