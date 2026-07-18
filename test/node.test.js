@@ -5,7 +5,10 @@
 const os = require('node:os'); const path = require('node:path'); const fs = require('node:fs');
 process.env.LAWBOR_DB = path.join(os.tmpdir(), 'lawbor-node-' + process.pid + '.jsonl');
 const assert = require('node:assert');
-const { createNode } = require('../lib/node');
+const { createNode: makeNode } = require('../lib/node');
+// These cases predate signature verification; they exercise the UNAUTHENTICATED path on purpose
+// (relay.js refuses it by default now). See test/lawbor.test.js for the impersonation regressions.
+const createNode = (cfg) => makeNode({ allowUnauthenticated: true, ...cfg });
 const { createStore } = require('../lib/store');
 
 let pass = 0, fail = 0;

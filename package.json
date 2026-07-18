@@ -18,11 +18,12 @@
     "README.md",
     "WORKFLOW.md",
     "DESKTOP.md",
+    "SECURITY.md",
     "AGENTS.md",
     ".claude-plugin/"
   ],
   "scripts": {
-    "test": "node test/lawbor.test.js && node test/node.test.js && node test/server.test.js && node test/mcp.test.js && node test/manifest.test.js && node test/desktop.test.js",
+    "test": "node test/lawbor.test.js && node test/node.test.js && node test/server.test.js && node test/mcp.test.js && node test/manifest.test.js && node test/mesh.test.js && node test/desktop.test.js",
     "start": "node server.js",
     "mcp": "node bin/lawbor-mcp.js",
     "desktop": "electron desktop/main.cjs"

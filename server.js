@@ -43,8 +43,14 @@ function build(deps = {}) {
     if (!url || !doFetch) return;                       // unknown peer → drop (dedup makes a later resend safe)
     await doFetch(url.replace(/\/$/, '') + '/lawbor/accept', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ envelope: env }) });
   };
+  // Signature verification is injected (node ships no ecrecover/keccak, and LAWBOR has zero deps).
+  // With neither a verifier nor the explicit opt-in, the relay refuses inbound envelopes rather than
+  // scoring an address the sender merely typed. See lib/relay.js::authenticate.
+  const allowUnauthenticated = deps.allowUnauthenticated !== undefined
+    ? deps.allowUnauthenticated : process.env.LAWBOR_ALLOW_UNAUTHENTICATED === '1';
   const node = createNode({ self: deps.self || SELF, human: deps.human || process.env.LAWBOR_HUMAN || null,
-    preflight: deps.preflight || mainstreetPreflight, minScore: deps.minScore || MIN_SCORE, send, store });
+    preflight: deps.preflight || mainstreetPreflight, minScore: deps.minScore || MIN_SCORE, send, store,
+    verifySig: deps.verifySig, allowUnauthenticated });
 
   const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(obj)); };
   const body = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 2e6) req.destroy(); }); req.on('end', () => { try { r(b ? JSON.parse(b) : {}); } catch { r(null); } }); });
@@ -53,7 +59,7 @@ function build(deps = {}) {
     const url = (req.url || '/').split('?')[0];
     const q = new URLSearchParams((req.url || '').split('?')[1] || '');
     try {
-      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length });
+      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates });
       if (req.method === 'GET' && url === '/.well-known/lawbor.json') return json(res, 200, { v: 1, addr: node.self, accept: '/lawbor/accept', minScore: MIN_SCORE, oracle: 'MainStreet', note: 'reputation-gated bot messaging' });
 
       if (req.method === 'POST' && url === '/peers') { const a = await body(req) || {}; if (!a.addr || !a.url) return json(res, 400, { error: 'addr + url required' }); peers.set(String(a.addr).toLowerCase(), a.url); node.addPeer(a.addr); return json(res, 200, { peers: node.peers() }); }
@@ -98,5 +104,10 @@ module.exports = { build };
 if (require.main === module) {
   const { server } = build();
   const PORT = Number(process.env.PORT || 4830);
-  server.listen(PORT, () => console.log('LAWBOR bot on :' + PORT + ' — self ' + SELF + ' — reputation-gated, descriptor-only. Set LAWBOR_ADDR + a signer to go live.'));
+  server.listen(PORT, () => {
+    console.log('LAWBOR bot on :' + PORT + ' — self ' + SELF + ' — reputation-gated, descriptor-only. Set LAWBOR_ADDR + a signer to go live.');
+    if (process.env.LAWBOR_ALLOW_UNAUTHENTICATED === '1') {
+      console.warn('⚠️  LAWBOR_ALLOW_UNAUTHENTICATED=1 — inbound `from` is NOT verified. Anyone can claim a reputable address and inherit its score. Development only.');
+    }
+  });
 }

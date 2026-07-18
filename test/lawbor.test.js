@@ -3,7 +3,13 @@
 // Run: node test/lawbor.test.js
 const assert = require('node:assert');
 const { buildEnvelope, validateEnvelope, envelopeId } = require('../lib/envelope');
-const { createRelay } = require('../lib/relay');
+const { createRelay: makeRelay } = require('../lib/relay');
+
+// These relay cases predate signature verification and exercise the UNAUTHENTICATED path on purpose
+// (relay.js now refuses it by default). Declaring the opt-in once, here, keeps every case honest
+// about what it proves: gating behaviour GIVEN a sender whose `from` was never verified. The
+// impersonation cases at the bottom cover the authenticated path and the reason it exists.
+const createRelay = (cfg) => makeRelay({ allowUnauthenticated: true, ...cfg });
 
 let pass = 0, fail = 0;
 const t = (n, fn) => Promise.resolve().then(fn).then(() => { pass++; console.log('  ✓ ' + n); }, (e) => { fail++; console.log('  ✗ ' + n + '\n      ' + (e && e.message)); });
@@ -89,6 +95,54 @@ const down = async () => { throw new Error('mainstreet 503'); };
   await t('relay originate: no peers → drop with "join the mesh first"', async () => {
     const r = createRelay({ self: A, preflight: proceed, peers: [] });
     assert.match((await r.originate(mkEnv(A, B, 'x'))).reason, /join the mesh/);
+  });
+
+  // --- IMPERSONATION: the hole this whole mechanism exists to close --------------------------
+  // Found 2026-07-18 while reviewing the mesh design, then reproduced against the real relay: an
+  // attacker refused under their own address was admitted with score 90 simply by writing a
+  // reputable address into `from`. No key, no signature. Base addresses are public, so the attack
+  // cost was zero — which made "reputation-gated" decorative.
+  const REPUTABLE = '0x' + '22'.repeat(20), ATTACKER = '0x' + '99'.repeat(20);
+  const byAddr = async (a) => (a.toLowerCase() === REPUTABLE.toLowerCase()
+    ? { decision: 'PROCEED', score: 90 } : { decision: 'BLOCK', score: 0 });
+  // a stand-in for viem/ethers: the signature IS the signer's address here, so tests stay offline
+  const verifySig = async ({ sig }) => (typeof sig === 'string' && /^0x[0-9a-fA-F]{40}$/.test(sig)
+    ? { ok: true, signer: sig } : { ok: false });
+  const signedBy = (signer, env) => ({ ...env, sig: signer });
+
+  await t('impersonation: writing a reputable address into `from` no longer inherits its score', async () => {
+    const r = makeRelay({ self: B, preflight: byAddr, verifySig, peers: [] });
+    const spoof = signedBy(ATTACKER, mkEnv(REPUTABLE, B, 'I am the reputable bot'));
+    const out = await r.accept(spoof);
+    assert.equal(out.action, 'drop');
+    assert.match(out.reason, /impersonation refused/);
+  });
+  await t('impersonation: a genuinely signed reputable sender still gets through, authenticated', async () => {
+    const r = makeRelay({ self: B, preflight: byAddr, verifySig, peers: [] });
+    const out = await r.accept(signedBy(REPUTABLE, mkEnv(REPUTABLE, B, 'gm')));
+    assert.equal(out.action, 'deliver');
+    assert.equal(out.senderScore, 90);
+    assert.equal(out.authenticated, true);
+  });
+  await t('FAIL CLOSED: with no verifier and no explicit opt-in, inbound is refused, not trusted', async () => {
+    const r = makeRelay({ self: B, preflight: byAddr, peers: [] });
+    const out = await r.accept(mkEnv(REPUTABLE, B, 'gm'));
+    assert.equal(out.action, 'drop');
+    assert.match(out.reason, /FAIL CLOSED/);
+    assert.equal(r.authenticates, false, 'and it admits it does not authenticate');
+  });
+  await t('FAIL CLOSED: a verifier that throws or returns junk never falls open', async () => {
+    const boom = makeRelay({ self: B, preflight: byAddr, verifySig: async () => { throw new Error('rpc down'); } });
+    assert.match((await boom.accept(signedBy(REPUTABLE, mkEnv(REPUTABLE, B, 'x')))).reason, /FAIL CLOSED/);
+    const junk = makeRelay({ self: B, preflight: byAddr, verifySig: async () => ({ ok: true }) });   // ok but no signer
+    assert.equal((await junk.accept(signedBy(REPUTABLE, mkEnv(REPUTABLE, B, 'x')))).action, 'drop');
+  });
+  await t('a signed envelope with no `sig` attached is refused before the oracle is even asked', async () => {
+    let asked = 0;
+    const r = makeRelay({ self: B, preflight: async (a) => { asked++; return byAddr(a); }, verifySig });
+    const out = await r.accept(mkEnv(REPUTABLE, B, 'no sig'));
+    assert.equal(out.action, 'drop');
+    assert.equal(asked, 0, 'authentication runs BEFORE the reputation lookup — no oracle call is wasted on a stranger');
   });
 
   console.log(`\n${pass} passed · ${fail} failed`);

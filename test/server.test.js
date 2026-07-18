@@ -5,7 +5,9 @@
 // Run: node test/server.test.js
 const os = require('node:os'); const path = require('node:path'); const fs = require('node:fs');
 const assert = require('node:assert');
-const { build } = require('../server');
+const { build: makeBuild } = require('../server');
+// Same as node.test.js: these predate signature verification and opt into the unauthenticated path.
+const build = (deps) => makeBuild({ allowUnauthenticated: true, ...deps });
 const { createStore } = require('../lib/store');
 
 let pass = 0, fail = 0;
