@@ -16,6 +16,7 @@
   "files": [
     "bin/",
     "lib/",
+    "sim/",
     "desktop/",
     "mcp.js",
     "server.js",
@@ -30,7 +31,8 @@
     "prepublishOnly": "npm test",
     "start": "node server.js",
     "mcp": "node bin/lawbor-mcp.js",
-    "desktop": "electron desktop/main.cjs"
+    "desktop": "electron desktop/main.cjs",
+    "sim": "node sim/interaction.js"
   },
   "keywords": [
     "mcp",

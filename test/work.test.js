@@ -87,6 +87,15 @@ t('cancel is the requester\'s own escape hatch, and only theirs', () => {
   assert.equal(job([...base, row(REQ, W1, buildWork('cancel', { jobId: 'j1', reason: 'no longer needed' }))]).state, 'cancelled');
 });
 
+t('mayApply: the requester may RE-SEND their own help_wanted (broadcast to more workers)', () => {
+  // regression (found by the interaction sim): posting the same job to a 2nd worker was refused
+  // "jobId already taken", silently breaking broadcast. The requester's re-send is allowed; a
+  // DIFFERENT address claiming the jobId is still a hijack.
+  const j = job([row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 'x' }))]);
+  assert.equal(mayApply(j, 'help_wanted', REQ).ok, true, 'the requester broadcasts their own job to another worker');
+  assert.equal(mayApply(j, 'help_wanted', W2).ok, false, 'a different address claiming the jobId is refused');
+});
+
 t('a jobId cannot be hijacked by re-announcing it under another address', () => {
   const j = job([
     row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 'the real job' })),
