@@ -1,0 +1,70 @@
+name: Publish npm + MCP registry
+
+# WHY CI PUBLISH. npm now restricts legacy "bypass-2FA" tokens for direct publishing, so a local
+# `npm publish` on a 2FA account can 403 ("forbidden by your security policy"). CI sidesteps that:
+# the npm step uses a granular token stored as the NPM_TOKEN secret, and the MCP-registry step needs
+# no npm token at all — it authenticates with GitHub OIDC, which also proves ownership of the
+# `io.github.philpof102-svg/*` namespace in server.json. Every publish runs the full test suite first.
+#
+# One-time setup (maintainer): create a granular npm access token with publish rights for `lawbor-bot`
+# at npmjs.com, add it as the repo secret NPM_TOKEN. Then push a tag `vX.Y.Z` (matching the versions
+# in package.json AND server.json) to release.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (test + pack, no publish)'
+        required: false
+        default: 'false'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write       # required for the MCP registry OIDC login
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      # LAWBOR has ZERO runtime dependencies, so this installs nothing — it just primes npm.
+      - name: Install deps
+        run: npm install --no-audit --no-fund
+
+      # The 137-check suite is the gate: a red build never publishes.
+      - name: Run tests
+        run: npm test
+
+      - name: npm publish
+        if: ${{ inputs.dry_run != 'true' }}
+        # continue-on-error: if this exact version is already on npm (publish-over → E403) or the
+        # NPM_TOKEN secret is absent, the MCP registry publish below must still run.
+        continue-on-error: true
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Install mcp-publisher
+        if: ${{ inputs.dry_run != 'true' }}
+        run: |
+          curl -L https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz | tar xz
+          chmod +x mcp-publisher
+          ./mcp-publisher --version
+
+      - name: MCP login (GitHub OIDC)
+        if: ${{ inputs.dry_run != 'true' }}
+        run: ./mcp-publisher login github-oidc
+
+      # Reads server.json at the repo root. Its description is 96 chars (the registry caps it at 100 —
+      # xsignal's first publish 422'd on a 243-char description, so this stays well under).
+      - name: MCP publish
+        if: ${{ inputs.dry_run != 'true' }}
+        run: ./mcp-publisher publish

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.philpof102-svg/lawbor",
+  "description": "Reputation-gated messaging + job negotiation for Base AI agents. Descriptor-only, nothing signs.",
+  "status": "active",
+  "repository": {
+    "url": "https://github.com/philpof102-svg/lawbor",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "lawbor-bot",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeHint": "npx",
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "lawbor-bot",
+          "valueHint": "package-name"
+        },
+        {
+          "type": "positional",
+          "value": "lawbor-mcp",
+          "valueHint": "bin-name"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "LAWBOR_ADDR",
+          "description": "Your bot's 0x Base address (its identity in the mesh).",
+          "isRequired": false
+        },
+        {
+          "name": "LAWBOR_HUMAN",
+          "description": "Your handle; travels as viaHuman provenance when you speak through your bot.",
+          "isRequired": false
+        },
+        {
+          "name": "MAINSTREET_URL",
+          "description": "The reputation oracle used to gate who may relay (fail-closed).",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
