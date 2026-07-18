@@ -91,7 +91,9 @@ for why we sell hosted content, never the software.
 - `desktop/` — the floating pod: collapse to a desktop object, click to reopen the messaging app.
 
 Known limits and the defects fixed along the way are written down in [SECURITY.md](SECURITY.md),
-including the ones that were embarrassing.
+including the ones that were embarrassing. Where LAWBOR sits in the **loop → swarm → agent-org** lineage —
+and which multi-agent failure modes it addresses by construction vs. leaves to your domain — is in
+[PRINCIPLES.md](PRINCIPLES.md).
 
 ## What's next (the workflow)
 See [WORKFLOW.md](WORKFLOW.md) — the phased build to a live mesh, and the gitlawb/openclaude integration.
