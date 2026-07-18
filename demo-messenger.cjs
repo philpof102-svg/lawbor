@@ -49,6 +49,22 @@ function node(self, human, port) {
   console.log('peering:', JSON.stringify(await peer(a, b)).slice(0, 60));
   await peer(b, a);
 
+  // AUTOPILOT — each node's bot works the job graph on its own (lib/autopilot.js). Post a job from the
+  // messenger and the OTHER bot bids for itself; the requester's bot then awards the cheapest bid. Both
+  // speak as the BOT, so the negotiation shows up in "Watch my bot" — nothing signs, nothing settles.
+  if (process.env.LAWBOR_AUTOPILOT !== '0') {
+    const { tick } = require('./lib/autopilot');
+    const policy = { maxOpenBids: 3, minBidsBeforeAward: 1, maxPrice: 100, maxActionsPerTick: 2 };
+    setInterval(async () => {
+      for (const n of [a, b]) {
+        try {
+          const did = await tick(n.b.node, { ...policy, bidPrice: n.human === 'Bob' ? 18 : 25 });
+          for (const d of did) console.log(`  🤖 ${n.human}'s bot ${d.kind} ${d.jobId}${d.price ? ' @ ' + d.price : ''} (signed:${d.signed})`);
+        } catch {}
+      }
+    }, 3000).unref();
+  }
+
   console.log('\n  TWO LAWBOR NODES UP — no server in the middle\n');
   console.log('  Phil  http://localhost:4830/app/messenger/   (his address ' + PHIL + ')');
   console.log('  Bob   http://localhost:4831/app/messenger/   (his address ' + BOB + ')');
