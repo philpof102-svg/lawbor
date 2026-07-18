@@ -264,6 +264,24 @@ function build(deps = {}) {
     return req.headers['x-lawbor-caller'] || null;            // dev fallback (unauthenticated)
   }
 
+  /* Operator-only gate for LOCAL controls (block / unblock / accept / delete). These mutate the
+   * operator's OWN node — and /delete is IRREVERSIBLE (it scrubs a stored body), so an open /delete on
+   * a publicly-bound node would let any stranger wipe the operator's store. Rule:
+   *   - loopback (127.0.0.1 / ::1) is trusted — the desktop pod and same-host tools reach the node here;
+   *   - a REMOTE caller must cryptographically sign AS the operator (verifyAuth wired, caller === self).
+   * The unauthenticated x-lawbor-caller dev-fallback is deliberately NOT accepted for the remote path —
+   * it is spoofable, so trusting it would reopen the hole. On a public deploy (Railway fronts a proxy,
+   * so nothing is loopback) wire deps.verifyAuth to operate these controls remotely. Peer traffic
+   * (/lawbor/accept) is unaffected: it is reputation-gated, not operator-gated. */
+  const isLoopback = (req) => { const ra = (req.socket && req.socket.remoteAddress) || ''; return ra === '127.0.0.1' || ra === '::1' || ra === '::ffff:127.0.0.1'; };
+  async function operatorOk(req) {
+    if (isLoopback(req)) return true;
+    if (typeof deps.verifyAuth !== 'function') return false;  // remote + no verifier ⇒ fail closed
+    const caller = await authCaller(req);
+    return !!caller && caller.toLowerCase() === String(node.self).toLowerCase();
+  }
+  const denyOperator = (res) => json(res, 401, { error: 'operator-only: call from localhost, or sign as self in x-lawbor-auth (needs verifyAuth wired)' });
+
   const server = http.createServer(async (req, res) => {
     const url = (req.url || '/').split('?')[0];
     const q = new URLSearchParams((req.url || '').split('?')[1] || '');
@@ -328,11 +346,12 @@ function build(deps = {}) {
       if (req.method === 'GET' && url === '/bot-activity') return json(res, 200, { view: 'bot-activity', threads: store.botActivity(node.self, Number(q.get('limit')) || 50) });
 
       // LOCAL consent controls — your own block/accept list. Never gossiped, no key, no funds.
-      if (req.method === 'POST' && url === '/block') { const a = await body(req) || {}; if (!a.addr) return json(res, 400, { error: 'addr required' }); return json(res, 200, node.block(a.addr)); }
-      if (req.method === 'POST' && url === '/unblock') { const a = await body(req) || {}; if (!a.addr) return json(res, 400, { error: 'addr required' }); return json(res, 200, node.unblock(a.addr)); }
-      if (req.method === 'POST' && url === '/accept') { const a = await body(req) || {}; if (!a.addr) return json(res, 400, { error: 'addr required' }); return json(res, 200, node.accept(a.addr)); }
-      // Local delete — remove an ALREADY-STORED body (block only stops future ones). Operator-local, like block.
-      if (req.method === 'POST' && url === '/delete') { const a = await body(req) || {}; if (!a.id) return json(res, 400, { error: 'id required' }); return json(res, 200, node.deleteMsg(a.id)); }
+      if (req.method === 'POST' && url === '/block') { if (!(await operatorOk(req))) return denyOperator(res); const a = await body(req) || {}; if (!a.addr) return json(res, 400, { error: 'addr required' }); return json(res, 200, node.block(a.addr)); }
+      if (req.method === 'POST' && url === '/unblock') { if (!(await operatorOk(req))) return denyOperator(res); const a = await body(req) || {}; if (!a.addr) return json(res, 400, { error: 'addr required' }); return json(res, 200, node.unblock(a.addr)); }
+      if (req.method === 'POST' && url === '/accept') { if (!(await operatorOk(req))) return denyOperator(res); const a = await body(req) || {}; if (!a.addr) return json(res, 400, { error: 'addr required' }); return json(res, 200, node.accept(a.addr)); }
+      // Local delete — remove an ALREADY-STORED body (block only stops future ones). IRREVERSIBLE, so
+      // the operator gate matters most here: a stranger must never be able to wipe the operator's store.
+      if (req.method === 'POST' && url === '/delete') { if (!(await operatorOk(req))) return denyOperator(res); const a = await body(req) || {}; if (!a.id) return json(res, 400, { error: 'id required' }); return json(res, 200, node.deleteMsg(a.id)); }
       if (req.method === 'GET' && url === '/thread') { const id = q.get('id'); if (!id) return json(res, 400, { error: 'id required' }); return json(res, 200, { thread: id, messages: store.thread(id) }); }
 
       if (req.method === 'POST' && url === '/lawbor/accept') { const a = await body(req) || {}; if (!a.envelope) return json(res, 400, { error: 'envelope required' }); const r = await node.receive(a.envelope); return json(res, r.action === 'drop' ? 202 : 200, { action: r.action, reason: r.reason || null }); }

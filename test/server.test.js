@@ -204,6 +204,23 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     botP.server.close();
   });
 
+  // Operator-only local controls: a REMOTE caller (non-loopback, unsigned) must NOT be able to wipe or
+  // mutate the operator's node. /delete is irreversible, so this closes a remote store-wipe. Loopback
+  // (the desktop pod, and every existing test above over 127.0.0.1) stays allowed — proven by those
+  // tests returning 200. Here we drive the real request handler with a spoofed remote socket.
+  await t('operator controls refuse a REMOTE unsigned caller (401), loopback still allowed', async () => {
+    const handler = botA.server.listeners('request')[0];
+    const call = (remoteAddress, url, payload) => new Promise((resolve) => {
+      const req = { method: 'POST', url, headers: { 'content-type': 'application/json' }, socket: { remoteAddress },
+        on(ev, cb) { if (ev === 'data') cb(JSON.stringify(payload)); if (ev === 'end') cb(); }, destroy() {} };
+      const res = { statusCode: 0, writeHead(c) { this.statusCode = c; }, end() { resolve(this.statusCode); } };
+      handler(req, res);
+    });
+    assert.equal(await call('203.0.113.7', '/delete', { id: 'x' }), 401, 'remote /delete is refused (no store-wipe)');
+    assert.equal(await call('203.0.113.7', '/block', { addr: B }), 401, 'remote /block is refused');
+    assert.equal(await call('127.0.0.1', '/delete', { id: 'nope' }), 200, 'loopback /delete is allowed (id just not found)');
+  });
+
   botA.server.close(); botB.server.close();
   for (const f of [dbA, dbB]) { try { fs.unlinkSync(f); } catch {} }
 

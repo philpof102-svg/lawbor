@@ -248,6 +248,14 @@ The two follow-ups named just above are now closed, with tests in `test/consent.
 - **Honest limit:** compaction *forgets* the tombstones it purges (the body is gone — the point). A
   still-active harasser is a job for `block` (permanent in the control log), not repeated deletes.
   Compaction is single-writer, like `record()` — a node compacts its own store, in-process.
+- **Operator gate on the local controls.** `/delete` being irreversible exposed a latent hole the
+  reversible `/block` had hidden: the local controls (`/block`, `/unblock`, `/accept`, `/delete`) were
+  unauthenticated, so on a publicly-bound node a stranger could mutate — or, via `/delete`, *wipe* — the
+  operator's store. They now require the operator: **loopback is trusted** (the desktop pod and same-host
+  tools), and a **remote** caller must sign as `self` in `x-lawbor-auth` (needs `verifyAuth` wired) — the
+  spoofable `x-lawbor-caller` dev-fallback is refused for remote, fail-closed. Peer traffic
+  (`/lawbor/accept`) is untouched (reputation-gated, not operator-gated). Pinned by a server test that
+  drives the handler with a spoofed remote socket (remote → 401, loopback → 200).
 
 ## Known limits — not fixed, stated plainly
 
