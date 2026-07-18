@@ -31,5 +31,5 @@ post(A, B, 'help_wanted', { jobId: 'hotfix', task: 'fix the null deref', depends
 post(A, D, 'help_wanted', { jobId: 'deploy2', task: 'ship the fixed build', dependsOn: ['hotfix'] });
 
 const { build } = require('./server');
-const { server } = build({ apps: [require('./apps/orggraph')], allowUnauthenticated: true });
-server.listen(4830, () => console.log('demo orggraph on http://localhost:4830/app/orggraph/'));
+const { server } = build({ apps: [require('./apps/orggraph'), require('./apps/standup'), require('./apps/tictactoe')], allowUnauthenticated: true });
+server.listen(4830, () => console.log('demo on http://localhost:4830/app/orggraph/ · /app/standup/ · POST /app/tictactoe/move'));

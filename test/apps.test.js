@@ -136,6 +136,52 @@ const premApp = { name: 'vault', description: 'premium', premium: true, routes: 
     assert.equal(apps.apps()[0].name, 'orggraph');
   });
 
+  // ---- shipped apps: a stateless game + a node digest -----------------------------------------
+  await t('tictactoe: a full game plays to a win, and illegal moves are rejected (pure, stateless)', async () => {
+    const ttt = require('../apps/tictactoe');
+    const { move } = ttt._game;
+    // X wins the top row: X0 O3 X1 O4 X2
+    let b = move(undefined, 0).board;              // X @0 (mark inferred)
+    b = move(b, 3).board;                          // O @3
+    b = move(b, 1).board;                          // X @1
+    b = move(b, 4).board;                          // O @4
+    const win = move(b, 2);                        // X @2 -> win
+    assert.equal(win.status, 'X'); assert.equal(win.turn, null);
+    assert.throws(() => move(win.board, 5), /game is over/, 'no moves after a win');
+    assert.throws(() => move('X........', 0), /taken/, 'cannot play a taken cell');
+    assert.throws(() => move(undefined, 9), /0\.\.8/, 'cell out of range');
+    assert.throws(() => move('X........', 1, 'X'), /not X's turn/, 'X cannot move twice in a row');
+    // a draw
+    let d = 'XXOOOXXXO';                            // full board, no line -> draw
+    assert.equal(ttt._game.statusOf(d), 'draw');
+    // via the MCP tool dispatch
+    const apps = createApps([ttt], {});
+    const r = await apps.tool('app_tictactoe_move', { cell: 4 }, {});
+    assert.equal(r.isError, false); assert.equal(r.payload.board, '....X....'); assert.equal(r.payload.turn, 'O');
+  });
+
+  await t('standup: the digest folds the node store (message + job-graph counts) and serves an HTML page', async () => {
+    const { createStore } = require('../lib/store');
+    const { buildWork } = require('../lib/work');
+    const base = path.join(require('node:os').tmpdir(), 'lawbor-standup-test-' + process.pid);
+    const store = createStore(base + '.jsonl', base + '.control');
+    const A = '0x' + 'a'.repeat(40), B = '0x' + 'b'.repeat(40);
+    store.record({ id: '0x1', thread: 't', from: A, to: B, body: buildWork('help_wanted', { jobId: 'build', task: 'b' }), ts: 1 }, { origin: 'bot', dir: 'out', rxAt: 1 });
+    store.record({ id: '0x2', thread: 't', from: A, to: B, body: buildWork('help_wanted', { jobId: 'deploy', task: 'd', dependsOn: ['build'] }), ts: 1 }, { origin: 'bot', dir: 'out', rxAt: 2 });
+    const apps = createApps([require('../apps/standup')], {});
+    const ctx = { node: { self: A }, store };
+    const data = await apps.http('GET', '/app/standup/data', ctx);
+    assert.equal(data.body.messages, 2);
+    assert.equal(data.body.jobs.total, 2);
+    assert.deepEqual(data.body.readyFrontier, ['build'], 'ready frontier = the un-blocked root');
+    assert.equal(data.body.jobs.blocked, 1, 'deploy is blocked by build');
+    const page = await apps.http('GET', '/app/standup/', ctx);
+    assert.ok(/text\/html/.test(page.contentType) && page.body.includes('standup'), 'serves an HTML dashboard');
+    // the MCP tool returns the same report
+    const tool = await apps.tool('app_standup_report', {}, ctx);
+    assert.equal(tool.payload.messages, 2);
+  });
+
   console.log(`\n${pass} passed · ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

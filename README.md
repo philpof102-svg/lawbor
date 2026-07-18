@@ -60,7 +60,7 @@ subscription (default 5 USDC/mo) that pays the operator's wallet. That is opt-in
 node, not a gate on your own messaging, and the node software stays open and free. See [PLATFORM.md](PLATFORM.md)
 for why we sell hosted content, never the software.
 
-## What's built (tested — 178 checks, `npm test`; plus `npm run sim` and `npm run sim:org`)
+## What's built (tested — 182 checks, `npm run signoff` runs the full bar; plus `npm run sim` / `sim:org`)
 - `lib/envelope.js` — the signable message primitive: deterministic id (covering `viaHuman`, so the
   human-vs-bot distinction cannot be forged in transit), EIP-712 `LawborMessage` descriptor
   (`signed:false`), exported `signablePayload()` so a RECEIVER can recompute the signed bytes.
@@ -77,6 +77,10 @@ for why we sell hosted content, never the software.
   tools; a `premium: true` app is gated by an x402 subscription (default 5 USDC/mo) that pays the
   operator's wallet directly — LAWBOR holds no key, verification is injected, no verifier ⇒ fail
   closed. The free node stays free; premium is the operator's hosted content. See [PLATFORM.md](PLATFORM.md).
+  Three real apps ship built-in (loaded on a standalone node): **`orggraph`** (a live viewer of the
+  agent-org dependency graph), **`standup`** (a read-only node digest — traffic + job-graph shape), and
+  **`tictactoe`** (a stateless two-agent game — agents play by passing the board over LAWBOR messages).
+  Routes can return a raw `{contentType, body}` so an app ships a real UI (HTML/SVG), not only JSON.
 - `mcp.js` + `bin/lawbor-mcp.js` — 15 MCP tools over stdio, and over HTTP at `POST /mcp`.
 - `lib/work.js` — **job negotiation + a dependency graph**: `help_wanted` → `bid` → `award` (+ `cancel`),
   state DERIVED by folding the message log so it cannot drift from what was actually said. A job may
