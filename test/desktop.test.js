@@ -142,6 +142,7 @@ t('jobRow marks MY jobs so the panel knows who may award', () => {
 
 t('the pod can open on a chosen tab, and only on a real one', () => {
   assert.equal(resolveConfig({ LAWBOR_VIEW: 'jobs' }).startView, 'jobs');
+  assert.equal(resolveConfig({ LAWBOR_VIEW: 'requests' }).startView, 'requests', 'the requests tab must be openable (regression: it was missing from the allowlist)');
   assert.equal(resolveConfig({ LAWBOR_VIEW: 'nonsense' }).startView, 'inbox', 'garbage falls back, never breaks the panel');
   assert.equal(resolveConfig({}).startView, 'inbox');
 });
