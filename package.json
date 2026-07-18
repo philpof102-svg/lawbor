@@ -36,6 +36,7 @@
     "mcp": "node bin/lawbor-mcp.js",
     "desktop": "electron desktop/main.cjs",
     "sim": "node sim/interaction.js",
+    "sim:org": "node sim/dynamic-org.js",
     "fuzz": "node sim/fuzz.js",
     "oracle": "node sim/oracle.js"
   },
