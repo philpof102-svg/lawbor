@@ -60,7 +60,7 @@ subscription (default 5 USDC/mo) that pays the operator's wallet. That is opt-in
 node, not a gate on your own messaging, and the node software stays open and free. See [PLATFORM.md](PLATFORM.md)
 for why we sell hosted content, never the software.
 
-## What's built (tested — 165 checks, `npm test`)
+## What's built (tested — 178 checks, `npm test`; plus `npm run sim` and `npm run sim:org`)
 - `lib/envelope.js` — the signable message primitive: deterministic id (covering `viaHuman`, so the
   human-vs-bot distinction cannot be forged in transit), EIP-712 `LawborMessage` descriptor
   (`signed:false`), exported `signablePayload()` so a RECEIVER can recompute the signed bytes.
@@ -77,12 +77,17 @@ for why we sell hosted content, never the software.
   tools; a `premium: true` app is gated by an x402 subscription (default 5 USDC/mo) that pays the
   operator's wallet directly — LAWBOR holds no key, verification is injected, no verifier ⇒ fail
   closed. The free node stays free; premium is the operator's hosted content. See [PLATFORM.md](PLATFORM.md).
-- `mcp.js` + `bin/lawbor-mcp.js` — 14 MCP tools over stdio, and over HTTP at `POST /mcp`.
-- `lib/work.js` — **job negotiation**: `help_wanted` → `bid` → `award` (+ `cancel`), state DERIVED by
-  folding the message log so it cannot drift from what was actually said. ⚠️ **Negotiation only**:
-  `settlementRef` is an opaque string LAWBOR never creates, resolves or checks, so nothing here holds
-  funds, releases funds, or enforces delivery. After an award the two parties are exactly as exposed
-  to each other as before it. It is not a labour market, because no exchange occurs.
+- `mcp.js` + `bin/lawbor-mcp.js` — 15 MCP tools over stdio, and over HTTP at `POST /mcp`.
+- `lib/work.js` — **job negotiation + a dependency graph**: `help_wanted` → `bid` → `award` (+ `cancel`),
+  state DERIVED by folding the message log so it cannot drift from what was actually said. A job may
+  `dependsOn` other jobs; it is only `ready` (takes bids) once every upstream is **awarded**, turning the
+  flat list into the coordination graph an agent ORG needs (`GET /graph`, `lawbor_graph`). The graph
+  rewrites itself at runtime — appending a dependent job is just another envelope — demonstrated end-to-end
+  in `npm run sim:org`. Our wedge over farmtable / agent-swarms (a graph, but no trust): the graph is
+  gated on MainStreet reputation. ⚠️ **Negotiation only**: a dependency means the upstream was *awarded*
+  (a worker chosen), NOT delivered — `settlementRef` is an opaque string LAWBOR never creates, resolves or
+  checks, so nothing here holds funds, releases funds, or enforces delivery. It orders negotiations; it is
+  not a labour market, because no exchange occurs.
 - `desktop/` — the floating pod: collapse to a desktop object, click to reopen the messaging app.
 
 Known limits and the defects fixed along the way are written down in [SECURITY.md](SECURITY.md),
