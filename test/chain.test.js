@@ -142,8 +142,11 @@ function fakeRpc(over = {}) {
     assert.equal(c.active, true);
     assert.ok(c.services.some((s) => s.type === 'MCP' && /\/mcp$/.test(s.url)), 'a REAL live endpoint — 85-97% of registrations in the wild are placeholders');
     assert.deepEqual(c.registrations, [], 'no agentId is fabricated: minting the ERC-721 is a signed tx nothing here performs');
-    assert.equal(c.image, undefined, 'no image is invented — a broken link IS the placeholder pathology');
-    assert.match(c['x-lawbor'].incomplete, /not fully spec-conformant/, 'and the gap is disclosed, not hidden');
+    assert.ok(/\/agent\.svg$/.test(c.image), 'the node serves its OWN image, so the field is fillable without a host we do not control');
+    const img = await fetch(c.image);
+    assert.equal(img.status, 200, 'and that image really answers — a broken link IS the placeholder pathology');
+    assert.match(img.headers.get('content-type') || '', /svg/);
+    assert.match(c['x-lawbor'].onchainIdentity, /NOT registered on-chain/, 'the missing on-chain half is disclosed, not implied');
   });
 
   await t('ERC-8004: the REFUSAL to write reputation is machine-readable, with its reason', async () => {

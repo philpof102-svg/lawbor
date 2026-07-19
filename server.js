@@ -376,6 +376,25 @@ function build(deps = {}) {
       // actually checking, or just accepting?" A node with no chain reader rates nothing, and says so.
       if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, verifiesSettlements: !!chain, consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only' });
       if (req.method === 'GET' && url === '/.well-known/lawbor.json') return json(res, 200, { v: 1, addr: node.self, accept: '/lawbor/accept', minScore: MIN_SCORE, oracle: 'MainStreet', note: 'reputation-gated bot messaging' });
+      /* The node's own agent image. Served from here on purpose: an ERC-8004 registration file needs an
+       * `image`, and pointing at an external host we do not control is how a registration rots into the
+       * placeholder the ecosystem is already full of. This one is live exactly as long as the node is —
+       * which is the same condition as every other claim in the card. */
+      if (req.method === 'GET' && url === '/agent.svg') {
+        const short = String(node.self).slice(0, 6) + '…' + String(node.self).slice(-4);
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="LAWBOR node ' + short + '">'
+          + '<rect width="512" height="512" fill="#0b0d10"/>'
+          + '<circle cx="256" cy="196" r="86" fill="none" stroke="#4ade80" stroke-width="6"/>'
+          + '<circle cx="256" cy="196" r="10" fill="#4ade80"/>'
+          + '<path d="M256 110 L256 186 M256 206 L214 268 M256 206 L298 268" stroke="#4ade80" stroke-width="6" fill="none" stroke-linecap="round"/>'
+          + '<text x="256" y="360" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="46" fill="#e6e8eb">LAWBOR</text>'
+          + '<text x="256" y="404" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="22" fill="#8b949e">' + short + '</text>'
+          + '<text x="256" y="452" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="17" fill="#8b949e">paid is proven · no global score</text>'
+          + '</svg>';
+        res.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=3600', ...CORS });
+        return res.end(svg);
+      }
+
       /* ERC-8004 registration file — DISCOVERY ONLY, and the refusal is the point.
        * ================================================================================================
        * ERC-8004 ("Trustless Agents") is the emerging standard for agent identity/reputation/validation,
@@ -420,7 +439,9 @@ function build(deps = {}) {
         // transaction, which nothing here does. Never fabricate one.
         const agentId = process.env.LAWBOR_AGENT_ID || null;
         card.registrations = agentId ? [{ agentId }] : [];
-        if (process.env.LAWBOR_AGENT_IMAGE) card.image = process.env.LAWBOR_AGENT_IMAGE;
+        // the node serves its own image (GET /agent.svg), so the field is honestly fillable without
+        // depending on a host we do not control. An operator may still override it.
+        card.image = process.env.LAWBOR_AGENT_IMAGE || (base + '/agent.svg');
 
         /* `supportedTrust` is a spec enum we have not verified the exact members of, and guessing a
          * plausible-looking value is how a file becomes confidently wrong. Our trust model goes in a
@@ -434,7 +455,7 @@ function build(deps = {}) {
           admits: admitProbation ? 'probation' : 'proceed-only',
           writesToErc8004ReputationRegistry: false,
           whyNot: 'its only write rule is that the submitter is not the agent owner, which a second address defeats for the price of gas. Measured in the wild at 59-91% coordinated-Sybil reviewers (Xiong et al. 2026). We publish re-verifiable evidence instead of a score.',
-          incomplete: process.env.LAWBOR_AGENT_IMAGE ? undefined : 'no `image` is set, so this file is not fully spec-conformant. A broken image link would make this the placeholder registration the ecosystem is already full of.',
+          onchainIdentity: agentId ? 'registered' : 'NOT registered on-chain — minting the ERC-721 agentId is a signed transaction the operator performs; set LAWBOR_AGENT_ID afterwards. Until then this file proves domain control only.',
         };
         return json(res, 200, card);
       }
