@@ -721,6 +721,29 @@ function build(deps = {}) {
        * Five rating designs were farmed by a dedicated adversary; what survived is that standing is a
        * CONSERVED, DEBITED quantity bounded by this node's OWN irrecoverable spend. So this is the view
        * from `node.self` and from nobody else, and two nodes will legitimately disagree. */
+      /* ONE ADDRESS, rendered from exactly what /credit already returns — no extra fact, and pointedly
+       * no free quantity (see apps/who.js for why that constraint is the whole design). Read-only and
+       * open, like every other read surface here. */
+      if (req.method === 'GET' && url === '/who') {
+        const of = String(q.get('of') || '').toLowerCase();
+        if (!/^0x[0-9a-f]{40}$/.test(of)) return json(res, 400, { error: 'who needs ?of=0x… (a 20-byte address)' });
+        const { blocked: wBlocked } = store.control();
+        const wMsgs = store.all().filter((m) => !wBlocked.has(String(m.from).toLowerCase()));
+        await resolveFacts(wMsgs);
+        const wEdges = work.settlementsFrom(wMsgs, foldOpts);
+        const wc = creditFor(node.self, wEdges, { returnFlow: deps.returnFlow || null });
+        const pick = (m) => Number((m && m.get(of)) || 0);
+        const { renderWho } = require('./apps/who');
+        const html = renderWho({
+          viewer: node.self, of,
+          directMicro: pick(wc.direct), inboundMicro: pick(wc.inbound), circleMicro: pick(wc.circle),
+          keyProven: work.provenFrom(wMsgs, foldOpts).has(of),
+          evidence: (wc.evidence || []).filter((e) => e.worker === of),
+        });
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...CORS });
+        return res.end(html);
+      }
+
       if (req.method === 'GET' && url === '/credit') {
         const { blocked: cBlocked } = store.control();
         const msgs = store.all().filter((m) => !cBlocked.has(String(m.from).toLowerCase()));
