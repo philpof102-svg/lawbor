@@ -33,7 +33,7 @@
  */
 const { build } = require('../server');
 const { createStore } = require('../lib/store');
-const os = require('os'), path = require('path');
+const os = require('os'), path = require('path'), fs = require('fs');
 
 const lower = (s) => String(s).toLowerCase();
 const A = (h) => '0x' + h.repeat(20);
@@ -50,6 +50,15 @@ const say = (s) => console.log('\n▸ ' + s);
 
 function makeNode(self) {
   const base = path.join(os.tmpdir(), 'lawbor-org-' + process.pid + '-' + NAME[lower(self)]);
+  /* START FROM EMPTY. A pid is NOT a unique run id — Windows recycles them freely — so a run that drew
+   * a previously-used pid APPENDED to that run's store and folded a graph it had not built. Observed
+   * once: the very first assertion saw 4 dependency edges including `hotfix` and `deploy2`, which this
+   * sim does not post until much later, and the ready frontier came back empty. It reproduces on no
+   * particular schedule, which is the worst kind of red: a signoff that fails for a reason that is not
+   * the code teaches everyone to stop reading signoff. */
+  for (const f of [base + '.jsonl', base + '.control', base + '.subs', base + '.txfacts']) {
+    try { fs.unlinkSync(f); } catch { /* absent is the normal case */ }
+  }
   const store = createStore(base + '.jsonl', base + '.control');
   return build({ self, human: NAME[lower(self)], preflight, store,
     allowLoopback: true, allowInsecure: true, allowUnauthenticated: true });
