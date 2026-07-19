@@ -1,0 +1,23 @@
+# `railway up` uploads the LOCAL TREE, not git — so what is excluded here is the only thing that
+# actually protects production. Explicit rather than relying on .gitignore being honoured.
+
+# local message stores: these hold real addresses and real settlement history from local runs
+data/
+*.jsonl
+*.control
+*.subs
+*.txfacts
+
+# secrets and noise
+.env
+.env.*
+*.log
+node_modules/
+.git/
+
+# local-only harnesses that must never run on a public node
+demo-messenger.cjs
+first-edge.cjs
+proof-of-key.cjs
+sim/
+test/
