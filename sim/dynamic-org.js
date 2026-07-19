@@ -32,6 +32,9 @@
  *   Rando (15) — a low-reputation stranger whose bid the relay drops before the graph is even consulted
  */
 const { build } = require('../server');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
 const { createStore } = require('../lib/store');
 const os = require('os'), path = require('path'), fs = require('fs');
 
@@ -49,7 +52,7 @@ const settle = () => sleep(220);
 const say = (s) => console.log('\n▸ ' + s);
 
 function makeNode(self) {
-  const base = path.join(os.tmpdir(), 'lawbor-org-' + process.pid + '-' + NAME[lower(self)]);
+  const base = path.join(LAWBOR_TMP, 'org-' + '-' + NAME[lower(self)]);
   /* START FROM EMPTY. A pid is NOT a unique run id — Windows recycles them freely — so a run that drew
    * a previously-used pid APPENDED to that run's store and folded a graph it had not built. Observed
    * once: the very first assertion saw 4 dependency edges including `hotfix` and `deploy2`, which this

@@ -3,6 +3,9 @@
 // The property that matters is not "a valid signature is accepted" but "a valid signature by the WRONG
 // key is still refused". Run: node test/verify.test.js
 const assert = require('node:assert');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
 const { createVerifier, verifierStatus } = require('../lib/verify');
 const { createNode } = require('../lib/node');
 const { createStore } = require('../lib/store');
@@ -22,7 +25,7 @@ const fakeViem = {
 };
 
 const mkNode = (verifySig) => {
-  const db = path.join(os.tmpdir(), 'lawbor-verify-' + process.pid + '-' + Math.random().toString(16).slice(2));
+  const db = path.join(LAWBOR_TMP, 'verify-' + Math.random().toString(16).slice(2));
   return createNode({ self: ME, human: 'me', preflight: async () => ({ decision: 'PROCEED', score: 80 }),
     send: async () => {}, peers: [PEER], store: createStore(db + '.jsonl', db + '.control'), verifySig });
 };

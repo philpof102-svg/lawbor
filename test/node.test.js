@@ -3,7 +3,10 @@
 // Proves Phil's corrected design: a human's inbox AND a "watch my bot" feed, over the reputation-gated relay.
 // Run: node test/node.test.js
 const os = require('node:os'); const path = require('node:path'); const fs = require('node:fs');
-process.env.LAWBOR_DB = path.join(os.tmpdir(), 'lawbor-node-' + process.pid + '.jsonl');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
+process.env.LAWBOR_DB = path.join(LAWBOR_TMP, 'node.jsonl');
 const assert = require('node:assert');
 const { createNode: makeNode } = require('../lib/node');
 // These cases predate signature verification; they exercise the UNAUTHENTICATED path on purpose
@@ -62,7 +65,7 @@ const lowScore = async () => ({ decision: 'PROCEED', score: 5 });
     assert.ok(watch.some((th) => th.last.includes('peer-review')), 'appears in watch-my-bot');
   });
   await t('REPUTATION GATE holds at the node: a low-score peer msg is dropped, never stored', async () => {
-    const nodeGated = createNode({ self: A, preflight: lowScore, send, peers: [B], store: createStore(path.join(os.tmpdir(), 'lawbor-gated-' + process.pid + '.jsonl')) });
+    const nodeGated = createNode({ self: A, preflight: lowScore, send, peers: [B], store: createStore(path.join(LAWBOR_TMP, 'gated.jsonl')) });
     const { buildEnvelope } = require('../lib/envelope');
     const env = buildEnvelope({ from: B, to: A, body: 'spam', viaHuman: 'x' }).envelope;
     const r = await nodeGated.receive(env);
@@ -70,7 +73,7 @@ const lowScore = async () => ({ decision: 'PROCEED', score: 5 });
   });
   await t('forwarding: a msg not for us is relayed onward (decentralized), not delivered to our human', async () => {
     const C = '0x' + 'cc'.repeat(20);
-    const nodeF = createNode({ self: A, preflight: proceed, send, peers: [C], store: createStore(path.join(os.tmpdir(), 'lawbor-fwd-' + process.pid + '.jsonl')) });
+    const nodeF = createNode({ self: A, preflight: proceed, send, peers: [C], store: createStore(path.join(LAWBOR_TMP, 'fwd.jsonl')) });
     const { buildEnvelope } = require('../lib/envelope');
     const env = buildEnvelope({ from: B, to: C, body: 'for C' }).envelope;
     const before = sent.length;
@@ -81,7 +84,7 @@ const lowScore = async () => ({ decision: 'PROCEED', score: 5 });
   try { fs.unlinkSync(process.env.LAWBOR_DB); } catch {}
   await t('ordering uses OUR clock, not the sender-chosen ts (spam cannot pin itself to the top)', () => {
     const os2 = require('node:os'), p2 = require('node:path');
-    const base2 = p2.join(os2.tmpdir(), 'lawbor-rx-' + process.pid);
+    const base2 = p2.join(LAWBOR_TMP, 'rx');
     const s2 = createStore(base2 + '.jsonl', base2 + '.control');
     const now = Math.floor(Date.now() / 1000);
     // both are first contact from strangers → the Requests bucket (consent gate); the anti-pinning

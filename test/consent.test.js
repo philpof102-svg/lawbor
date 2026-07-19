@@ -21,9 +21,26 @@ const proceed = async () => ({ decision: 'PROCEED', score: 70 });
 const lowScore = async () => ({ decision: 'PROCEED', score: 5 });
 
 let n = 0;
+/* UNIQUE BY CONSTRUCTION, not by hope.
+ * These paths used to be `tmpdir/lawbor-consent-<pid>-<n>`, and nothing ever deleted them — not at
+ * start, not at teardown. A pid is NOT a unique run id (Windows recycles them freely) and `n` restarts
+ * at 1 every run, so the pair (pid, n) repeats EXACTLY across runs: a run that draws a used pid inherits
+ * the previous run's message log and control log at the identical path, and then "first contact" is not
+ * first contact and the rate limiter is already at its cap.
+ *
+ * This was the intermittent signoff red, hunted for an hour and diagnosed with three falsified
+ * hypotheses on the way. What finally proved it: 1820 stale lawbor-* files had accumulated in the temp
+ * dir of this machine, and seeding a .jsonl at the exact path a run WOULD use reproduces the failure on
+ * demand. Under CPU load the rate went from about 1-in-8 to 1-in-2 — that correlation is observed and
+ * NOT explained, so it stays written down rather than dressed up as part of the diagnosis.
+ *
+ * mkdtempSync makes collision impossible instead of unlikely, which is the only version of this that
+ * cannot come back. */
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'lawbor-consent-'));
+
 // a fresh, isolated node each time (own messages file + own control file)
 function freshNode(preflight = proceed) {
-  const base = path.join(os.tmpdir(), 'lawbor-consent-' + process.pid + '-' + (++n));
+  const base = path.join(TMP, 'c-' + (++n));
   const store = createStore(base + '.jsonl', base + '.control');
   const sent = [];
   const node = createNode({ self: A, human: 'me', preflight, allowUnauthenticated: true,
@@ -172,7 +189,7 @@ const inBot = (from, body) => buildEnvelope({ from, to: A, body, viaHuman: null 
 
   // ---- DoS hardening: rate-limit + the store cache -------------------------------------------
   await t('RATE-LIMIT: a sender is capped per window even if reputable — a flood is bounded', async () => {
-    const b2 = path.join(os.tmpdir(), 'lawbor-rl-' + process.pid + '-' + (++n));
+    const b2 = path.join(TMP, 'rl-' + (++n));
     const store = createStore(b2 + '.jsonl', b2 + '.control');
     let clk = 1_000_000;
     const node = createNode({ self: A, human: 'me', preflight: async () => ({ decision: 'PROCEED', score: 70 }),
@@ -187,7 +204,7 @@ const inBot = (from, body) => buildEnvelope({ from, to: A, body, viaHuman: null 
   });
 
   await t('the store cache reflects a just-recorded message (no per-call file re-parse)', () => {
-    const b3 = path.join(os.tmpdir(), 'lawbor-cache-' + process.pid + '-' + (++n));
+    const b3 = path.join(TMP, 'cache-' + (++n));
     const s = createStore(b3 + '.jsonl', b3 + '.control');
     assert.equal(s.all().length, 0);                        // primes the (empty) cache
     s.record(buildEnvelope({ from: S, to: A, body: 'hi', viaHuman: 'x' }).envelope, { origin: 'human', dir: 'in' });
@@ -197,7 +214,7 @@ const inBot = (from, body) => buildEnvelope({ from, to: A, body, viaHuman: null 
 
   // ---- DoS hardening #2: delete tombstones + retention compaction ----------------------------
   await t('DELETE: a tombstone removes an already-stored body and is STICKY against redelivery', () => {
-    const b = path.join(os.tmpdir(), 'lawbor-del-' + process.pid + '-' + (++n));
+    const b = path.join(TMP, 'del-' + (++n));
     const s = createStore(b + '.jsonl', b + '.control');
     const env = buildEnvelope({ from: S, to: A, body: 'harass', nonce: 'k', viaHuman: 'x' }).envelope;
     s.record(env, { origin: 'human', dir: 'in' });
@@ -212,7 +229,7 @@ const inBot = (from, body) => buildEnvelope({ from, to: A, body, viaHuman: null 
   });
 
   await t('COMPACT: maxMessages keeps only the newest N live rows and drops tombstones from disk', () => {
-    const b = path.join(os.tmpdir(), 'lawbor-cap-' + process.pid + '-' + (++n));
+    const b = path.join(TMP, 'cap-' + (++n));
     const s = createStore(b + '.jsonl', b + '.control', { maxMessages: 2 });
     let clk = 1000;
     const put = (body) => s.record(buildEnvelope({ from: S, to: A, body, nonce: body, viaHuman: 'x' }).envelope, { origin: 'human', dir: 'in', rxAt: clk += 10 });
@@ -228,7 +245,7 @@ const inBot = (from, body) => buildEnvelope({ from, to: A, body, viaHuman: null 
   });
 
   await t('COMPACT: maxAgeMs drops rows older than the window (on our clock)', () => {
-    const b = path.join(os.tmpdir(), 'lawbor-age-' + process.pid + '-' + (++n));
+    const b = path.join(TMP, 'age-' + (++n));
     const s = createStore(b + '.jsonl', b + '.control', { maxAgeMs: 1000 });
     s.record(buildEnvelope({ from: S, to: A, body: 'old', nonce: 'o', viaHuman: 'x' }).envelope, { origin: 'human', dir: 'in', rxAt: 1000 });
     s.record(buildEnvelope({ from: S, to: A, body: 'new', nonce: 'w', viaHuman: 'x' }).envelope, { origin: 'human', dir: 'in', rxAt: 5000 });
@@ -238,7 +255,7 @@ const inBot = (from, body) => buildEnvelope({ from, to: A, body, viaHuman: null 
   });
 
   await t('AUTO-COMPACT: compactEvery bounds a busy store without a manual call', () => {
-    const b = path.join(os.tmpdir(), 'lawbor-auto-' + process.pid + '-' + (++n));
+    const b = path.join(TMP, 'auto-' + (++n));
     const s = createStore(b + '.jsonl', b + '.control', { maxMessages: 3, compactEvery: 4 });
     let clk = 0;
     // 12 records / compactEvery 4 → compaction lands on the last write, so the steady state is the cap.

@@ -24,6 +24,9 @@
  * Run: npm run sim:rating
  */
 const path = require('path');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
 const os = require('os');
 const { build } = require('../server');
 const { createStore } = require('../lib/store');
@@ -81,7 +84,7 @@ async function main() {
 
   const nodes = {};
   for (const s of [VIEW, HON, RING_A, RING_B]) {
-    const f = path.join(os.tmpdir(), 'lawbor-rating-' + process.pid + '-' + NAME[lower(s)]);
+    const f = path.join(LAWBOR_TMP, 'rating-' + '-' + NAME[lower(s)]);
     for (const ext of ['.jsonl', '.control', '.subs', '.txfacts']) { try { require('fs').unlinkSync(f + ext); } catch {} }
     nodes[lower(s)] = build({ self: s, human: NAME[lower(s)], preflight, chain,
       store: createStore(f + '.jsonl', f + '.control'), txFactsFile: f + '.txfacts',

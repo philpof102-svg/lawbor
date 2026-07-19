@@ -4,6 +4,9 @@
 // job, award it, settle it with a tx the fake chain really serves, and read /credit.
 // Run: node test/chain.test.js
 const assert = require('node:assert');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
 const { createChainReader, TRANSFER_TOPIC, USDC_BASE } = require('../lib/chain');
 const { build } = require('../server');
 const { createStore } = require('../lib/store');
@@ -75,7 +78,7 @@ function fakeRpc(over = {}) {
   // ---------------------------------------------------------------------------------------------
   console.log('\nLAWBOR settle → credit, driven over real HTTP:');
 
-  const base = path.join(__dirname, '..', 'data', 'test-chain-' + process.pid);
+  const base = path.join(LAWBOR_TMP, 'chain');
   const facts = base + '.txfacts';
   for (const f of [base + '.jsonl', base + '.control', base + '.subs', facts]) { try { fs.unlinkSync(f); } catch {} }
   const store = createStore(base + '.jsonl', base + '.control');

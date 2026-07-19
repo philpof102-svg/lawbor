@@ -4,6 +4,9 @@
 // reputation-gates it → it lands in B's human inbox; B's bot answers autonomously → shows in A's watch feed.
 // Run: node test/server.test.js
 const os = require('node:os'); const path = require('node:path'); const fs = require('node:fs');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
 const assert = require('node:assert');
 const { build: makeBuild } = require('../server');
 // Same as node.test.js: these predate signature verification and opt into the unauthenticated path.
@@ -18,8 +21,8 @@ let pass = 0, fail = 0;
 const t = (n, fn) => Promise.resolve().then(fn).then(() => { pass++; console.log('  ✓ ' + n); }, (e) => { fail++; console.log('  ✗ ' + n + '\n      ' + (e && e.message)); });
 
 const A = '0x' + 'aa'.repeat(20), B = '0x' + 'bb'.repeat(20);
-const dbA = path.join(os.tmpdir(), 'lawbor-srvA-' + process.pid + '.jsonl');
-const dbB = path.join(os.tmpdir(), 'lawbor-srvB-' + process.pid + '.jsonl');
+const dbA = path.join(LAWBOR_TMP, 'srvA.jsonl');
+const dbB = path.join(LAWBOR_TMP, 'srvB.jsonl');
 /* START FROM EMPTY, and clean the CONTROL log too.
  * A pid is not a unique run id — Windows recycles them — and the teardown at the bottom of this file
  * only unlinks the .jsonl, never the sibling .control that holds CONSENT. So an accepted-sender row
@@ -92,7 +95,7 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
   });
 
   await t('REPUTATION GATE over HTTP: a bot that MainStreet rejects gets 202-dropped, nothing stored', async () => {
-    const botC = build({ self: A, preflight: avoid, store: createStore(path.join(os.tmpdir(), 'lawbor-srvC-' + process.pid + '.jsonl')) });
+    const botC = build({ self: A, preflight: avoid, store: createStore(path.join(LAWBOR_TMP, 'srvC.jsonl')) });
     await new Promise((r) => botC.server.listen(0, r));
     const urlC = 'http://127.0.0.1:' + botC.server.address().port;
     const { buildEnvelope } = require('../lib/envelope');
@@ -201,7 +204,7 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
   await t('premium: signed caller auth gates access over HTTP; a forged signature is refused', async () => {
     const { apps } = require('../apps/example');
     const WALLET = '0x' + '99'.repeat(20), PAYER = '0x' + 'b1'.repeat(20);
-    const botP = build({ self: A, preflight: proceed, store: createStore(path.join(os.tmpdir(), 'lawbor-prem-' + process.pid + '.jsonl')),
+    const botP = build({ self: A, preflight: proceed, store: createStore(path.join(LAWBOR_TMP, 'prem.jsonl')),
       apps, payTo: WALLET, x402verify: async (p) => ({ ok: true, payer: p.payer, amountUsdc: 5 }),
       verifyAuth: async ({ sig }) => ({ ok: /^0x[0-9a-f]{40}$/i.test(sig), signer: sig }) });   // stub: sig IS the signer
     await new Promise((r) => botP.server.listen(0, r));

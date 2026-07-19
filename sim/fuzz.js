@@ -28,6 +28,9 @@
  *       tombstones + superseded rows, which never fed the fold, so not one job may change)
  */
 const os = require('os'), path = require('path'), fs = require('fs');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
 const { createNode } = require('../lib/node');
 const { createStore } = require('../lib/store');
 const { buildWork, jobsFrom, foldThread } = require('../lib/work');
@@ -55,7 +58,7 @@ async function scenario(seed, actions) {
   const files = [];
   const nodes = {};
   for (const self of agents) {
-    const base = path.join(os.tmpdir(), 'lawbor-fuzz-' + process.pid + '-' + seed + '-' + self.slice(2, 6));
+    const base = path.join(LAWBOR_TMP, 'fuzz-' + '-' + seed + '-' + self.slice(2, 6));
     files.push(base + '.jsonl', base + '.control');
     const store = createStore(base + '.jsonl', base + '.control');
     const send = async (to, env) => { const t = registry[lower(to)]; if (t) await t.receive(env); };

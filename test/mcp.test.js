@@ -2,6 +2,9 @@
 // LAWBOR MCP guards — the open-source tool surface any openclaude/gitlawb agent mounts.
 // Offline: the node is injected with a stubbed preflight + captured transport. Run: node test/mcp.test.js
 const os = require('node:os'); const path = require('node:path'); const fs = require('node:fs');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
 const assert = require('node:assert');
 const { dispatch, TOOLS, PROTOCOL, SERVER } = require('../mcp');
 const { createNode } = require('../lib/node');
@@ -11,7 +14,7 @@ let pass = 0, fail = 0;
 const t = (n, fn) => Promise.resolve().then(fn).then(() => { pass++; console.log('  ✓ ' + n); }, (e) => { fail++; console.log('  ✗ ' + n + '\n      ' + (e && e.message)); });
 
 const A = '0x' + 'aa'.repeat(20), B = '0x' + 'bb'.repeat(20);
-const db = path.join(os.tmpdir(), 'lawbor-mcp-' + process.pid + '.jsonl');
+const db = path.join(LAWBOR_TMP, 'mcp.jsonl');
 const sent = [];
 const node = createNode({ self: A, human: 'phil', preflight: async () => ({ decision: 'PROCEED', score: 71 }),
   send: async (to, env) => { sent.push({ to, env }); }, peers: [B], store: createStore(db) });

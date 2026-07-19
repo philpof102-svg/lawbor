@@ -16,6 +16,9 @@
  *   Sybil  (70) — reputable enough to pass, but a nuisance Alice will block
  */
 const { build } = require('../server');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
 const { createStore } = require('../lib/store');
 const os = require('os'), path = require('path');
 
@@ -33,7 +36,7 @@ const settle = () => sleep(220);                          // let a fire-and-forg
 const say = (s) => console.log('\n▸ ' + s);
 
 function makeNode(self) {
-  const base = path.join(os.tmpdir(), 'lawbor-sim-' + process.pid + '-' + NAME[lower(self)]);
+  const base = path.join(LAWBOR_TMP, 'sim-' + '-' + NAME[lower(self)]);
   const store = createStore(base + '.jsonl', base + '.control');
   return build({ self, human: NAME[lower(self)], preflight, store,
     allowLoopback: true, allowInsecure: true, allowUnauthenticated: true });

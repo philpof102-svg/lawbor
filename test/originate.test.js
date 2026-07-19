@@ -5,6 +5,9 @@
 // — a spoofable `from`. These tests pin the seam that closes it, and the refusal that keeps it honest.
 // Run: node test/originate.test.js
 const assert = require('node:assert');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
 const os = require('node:os'), path = require('node:path'), fs = require('node:fs');
 const { createNode } = require('../lib/node');
 const { createStore } = require('../lib/store');
@@ -26,7 +29,7 @@ const verifier = async ({ sig, claimed }) => (String(sig) === '0x' + String(clai
 
 let seq = 0;
 const mk = (self, extra = {}) => {
-  const db = path.join(os.tmpdir(), 'lawbor-orig-' + process.pid + '-' + (++seq));
+  const db = path.join(LAWBOR_TMP, 'orig-' + (++seq));
   for (const e of ['.jsonl', '.control']) { try { fs.unlinkSync(db + e); } catch {} }
   return createNode({ self, human: 'op', preflight, send: async () => {}, peers: [A, B].filter((x) => x !== self),
     store: createStore(db + '.jsonl', db + '.control'), ...extra });

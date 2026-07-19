@@ -5,6 +5,9 @@
 // halves that make relaxing it safe: it is OFF unless asked, and it buys a stranger NOTHING but a voice.
 // Run: node test/probation.test.js
 const assert = require('node:assert');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
 const os = require('node:os'), path = require('node:path'), fs = require('node:fs');
 const { createNode } = require('../lib/node');
 const { createStore } = require('../lib/store');
@@ -20,7 +23,7 @@ const preflight = async (a) => String(a).toLowerCase() === GOOD.toLowerCase()
   : { decision: 'CAUTION', score: null };
 
 const mkNode = (tag, admitProbation) => {
-  const db = path.join(os.tmpdir(), 'lawbor-prob-' + process.pid + '-' + tag);
+  const db = path.join(LAWBOR_TMP, 'prob-' + tag);
   for (const e of ['.jsonl', '.control']) { try { fs.unlinkSync(db + e); } catch {} }
   return createNode({ self: ME, human: 'me', preflight, send: async () => {}, peers: [GOOD, STRANGER],
     store: createStore(db + '.jsonl', db + '.control'), allowUnauthenticated: true, admitProbation });

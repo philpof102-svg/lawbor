@@ -15,6 +15,9 @@
  * Run: npm run sim:bounty
  */
 const path = require('path');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
 const os = require('os');
 const fs = require('fs');
 const { build } = require('../server');
@@ -59,7 +62,7 @@ async function main() {
   const chain = createChainReader({ rpcUrl: 'http://sim', fetch: base.rpc });
   const nodes = {};
   for (const s of [BROKEN, FIXER]) {
-    const f = path.join(os.tmpdir(), 'lawbor-bounty-' + process.pid + '-' + NAME[s.toLowerCase()]);
+    const f = path.join(LAWBOR_TMP, 'bounty-' + '-' + NAME[s.toLowerCase()]);
     for (const e of ['.jsonl', '.control', '.txfacts']) { try { fs.unlinkSync(f + e); } catch {} }
     nodes[s.toLowerCase()] = build({ self: s, human: NAME[s.toLowerCase()], preflight, chain,
       store: createStore(f + '.jsonl', f + '.control'), txFactsFile: f + '.txfacts',

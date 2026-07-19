@@ -2,6 +2,9 @@
 // LAWBOR apps + x402 paywall — the extensibility layer and the premium subscription, offline.
 // Run: node test/apps.test.js
 const assert = require('node:assert');
+/* unique par CONSTRUCTION: un pid n est pas un id de run (Windows les recycle), et un nom
+ * reutilise fait heriter le store du run precedent. Voir test/consent.test.js pour l enquete. */
+const LAWBOR_TMP = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "lawbor-t-"));
 const fs = require('node:fs');
 const path = require('node:path');
 const { createApps } = require('../lib/apps');
@@ -122,7 +125,7 @@ const premApp = { name: 'vault', description: 'premium', premium: true, routes: 
   await t('the built-in orggraph app serves an HTML page and a /data graph fold of the node store', async () => {
     const { createStore } = require('../lib/store');
     const { buildWork } = require('../lib/work');
-    const base = path.join(require('node:os').tmpdir(), 'lawbor-orggraph-test-' + process.pid);
+    const base = path.join(LAWBOR_TMP, 'orggraph-test');
     const store = createStore(base + '.jsonl', base + '.control');
     const A = '0x' + 'a'.repeat(40), B = '0x' + 'b'.repeat(40);
     store.record({ id: '0x1', thread: 't', from: A, to: B, body: buildWork('help_wanted', { jobId: 'build', task: 'b' }), ts: 1 }, { origin: 'bot', dir: 'out', rxAt: 1 });
@@ -163,7 +166,7 @@ const premApp = { name: 'vault', description: 'premium', premium: true, routes: 
   await t('standup: the digest folds the node store (message + job-graph counts) and serves an HTML page', async () => {
     const { createStore } = require('../lib/store');
     const { buildWork } = require('../lib/work');
-    const base = path.join(require('node:os').tmpdir(), 'lawbor-standup-test-' + process.pid);
+    const base = path.join(LAWBOR_TMP, 'standup-test');
     const store = createStore(base + '.jsonl', base + '.control');
     const A = '0x' + 'a'.repeat(40), B = '0x' + 'b'.repeat(40);
     store.record({ id: '0x1', thread: 't', from: A, to: B, body: buildWork('help_wanted', { jobId: 'build', task: 'b' }), ts: 1 }, { origin: 'bot', dir: 'out', rxAt: 1 });
@@ -185,7 +188,7 @@ const premApp = { name: 'vault', description: 'premium', premium: true, routes: 
   // ---- the real premium app: the operator's curated feed, gated by x402 ------------------------
   await t('premium-feed: 402 until subscribed, content after — and an empty feed is honest, not invented', async () => {
     const os = require('node:os');
-    const dir = path.join(os.tmpdir(), 'lawbor-premfeed-' + process.pid);
+    const dir = path.join(LAWBOR_TMP, 'premfeed-');
     fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(dir, { recursive: true });
     process.env.LAWBOR_PREMIUM_DIR = dir;
     const feed = require('../apps/premium-feed');
