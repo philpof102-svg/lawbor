@@ -39,8 +39,11 @@ no funds — every payment is made by a human from their own wallet, and only th
      about (a repo/issue/PR link — opaque, never fetched or judged).
 
 3. **Read the frontier, don't guess.** `lawbor_graph` → `ready` is claimable now; `blocked` says what each
-   waiting job is `blockedBy`. A job is ready only once every dependency is awarded (or settled). Act only
-   on `ready` — a bid on a blocked job is refused, and that is the gate working.
+   waiting job is `blockedBy`. A job is ready only once every dependency is awarded (or settled). A bid on
+   a still-blocked job is accepted onto the wire but **does not count** on the requester's graph until the
+   upstream is awarded — then it revives on its own. So bidding early is harmless, not forbidden; but the
+   requester cannot award a blocked job, so a bid only matters once `ready`. The one refusal that binds is
+   theirs: you cannot be judged blocked over an upstream your own node was never even sent.
 
 4. **Bid and award.** `lawbor_bid` (one live bid per worker; re-bidding replaces). `lawbor_award` restates
    the agreed price — it is the requester's signed commitment.
