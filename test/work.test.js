@@ -256,7 +256,7 @@ t('a mutation for a job that appears NOWHERE is still ignored — two passes inv
 
 // ---- settle: bind a job to a REAL, refutable Base USDC transfer (the unforgeable primitive) --------
 console.log('\nLAWBOR work — settle (job ↔ verified Base USDC tx), the input to the rating:');
-const { settlementsFrom, USDC_BASE } = require('../lib/work');
+const { settlementsFrom, provenFrom, USDC_BASE } = require('../lib/work');
 const TX = '0x' + 'ab'.repeat(32);
 const fact = (over) => ({ chainId: 8453, token: USDC_BASE, from: REQ, to: W1, valueMicro: '500000000', confirmations: 12, blockTime: 1700000000, ...over });
 // a job awarded to W1 at price, ready to be settled
@@ -385,6 +385,53 @@ t('only the two parties may validate; a stranger cannot', () => {
   const m = [...awarded(), row(W2, REQ, buildWork('validate', { jobId: 'j1', txHash: VTX }))];
   const j = foldThread(m, { txFacts: new Map([[VTX, vfact()]]) }).get('j1');
   assert.equal(j.validations.length, 0);
+});
+
+// ---- the key-proof guard: refuse to COMMIT to an address nobody has proven they control ----------
+console.log('\nLAWBOR work — key-proof guard on AWARD (the last moment a rule can prevent the loss):');
+
+t('provenFrom derives key control at the ADDRESS level, from the tx SIGNER only', () => {
+  const m = [...awarded(), row(W1, REQ, buildWork('validate', { jobId: 'j1', txHash: VTX }))];
+  const proven = provenFrom(m, { txFacts: new Map([[VTX, vfact({ from: W1, to: REQ })]]) });
+  assert.ok(proven.has(W1.toLowerCase()), 'W1 signed it — W1 is proven');
+  assert.ok(!proven.has(REQ.toLowerCase()), 'REQ only RECEIVED it — receiving proves nothing');
+});
+
+t('above the threshold, an unproven worker cannot be awarded — and the reason says what to ask for', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'big', task: 't' }))];
+  const job = foldThread(m).get('big');
+  const r = mayApply(job, 'award', REQ, { requireProofAbove: 100, proven: new Set(), worker: W1, price: '500 USDC' });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /never proven they hold their key/);
+  assert.match(r.reason, /validate/, 'it must tell them the way out');
+});
+
+t('BELOW the threshold it goes through — the guard is a ceiling, not a wall', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'small', task: 't' }))];
+  const job = foldThread(m).get('small');
+  assert.equal(mayApply(job, 'award', REQ, { requireProofAbove: 100, proven: new Set(), worker: W1, price: '5 USDC' }).ok, true);
+});
+
+t('a PROVEN worker is awarded any amount', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'big2', task: 't' }))];
+  const job = foldThread(m).get('big2');
+  const proven = new Set([W1.toLowerCase()]);
+  assert.equal(mayApply(job, 'award', REQ, { requireProofAbove: 100, proven, worker: W1, price: '99999 USDC' }).ok, true);
+});
+
+t('an UNREADABLE price fails CLOSED — we do not wave through what we cannot measure', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'weird', task: 't' }))];
+  const job = foldThread(m).get('weird');
+  const r = mayApply(job, 'award', REQ, { requireProofAbove: 100, proven: new Set(), worker: W1, price: 'to be agreed' });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /cannot read the price/);
+});
+
+t('OFF by default: with no threshold set, nothing changes for anyone', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'plain', task: 't' }))];
+  const job = foldThread(m).get('plain');
+  assert.equal(mayApply(job, 'award', REQ, { worker: W1, price: '9999 USDC' }).ok, true);
+  assert.equal(mayApply(job, 'award', REQ).ok, true, 'and the old 3-arg call still works');
 });
 
 t('buildWork rejects a malformed txHash and a non-integer amount', () => {

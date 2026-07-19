@@ -286,6 +286,11 @@ function build(deps = {}) {
     : (process.env.LAWBOR_RPC_URL || 'https://mainnet.base.org');
   const chain = deps.chain !== undefined ? deps.chain
     : createChainReader({ rpcUrl, fetch: doFetch });
+  /* Opt-in: refuse to AWARD above this amount to a worker who has never proven they hold their key.
+   * Unset = off (unchanged behaviour). It stops LAWBOR committing to an unproven address; it cannot
+   * stop a human paying one anyway, outside the protocol. */
+  const requireProofAbove = deps.requireProofAbove !== undefined ? deps.requireProofAbove
+    : (process.env.LAWBOR_REQUIRE_PROOF_ABOVE ? Number(process.env.LAWBOR_REQUIRE_PROOF_ABOVE) : null);
   const MIN_CONF_CACHE = 12;
   const txFacts = new Map();
   const factsFile = deps.txFactsFile !== undefined ? deps.txFactsFile
@@ -407,8 +412,18 @@ function build(deps = {}) {
       if (req.method === 'POST' && url === '/work') {
         const a = await body(req) || {};
         if (!a.to || !a.kind) return json(res, 400, { error: 'to + kind required' });
-        const job = work.foldThread(store.all()).get(a.jobId);
-        const may = work.mayApply(job, a.kind, node.self);
+        const wMsgs = store.all();
+        const job = work.foldThread(wMsgs).get(a.jobId);
+        /* KEY-PROOF GUARD on AWARD (opt-in, LAWBOR_REQUIRE_PROOF_ABOVE). Resolved here because it needs
+         * chain facts: an address is proven only when it SIGNED a validated transfer. Enforced on the
+         * award — the last moment a rule can prevent paying an address nobody controls, since a settle
+         * records money that has already left. */
+        let proven;
+        if (a.kind === 'award' && requireProofAbove != null) {
+          await resolveFacts(wMsgs);
+          proven = work.provenFrom(wMsgs, { txFacts });
+        }
+        const may = work.mayApply(job, a.kind, node.self, { requireProofAbove, proven, worker: a.worker, price: a.price });
         if (!may.ok) return json(res, 409, { error: may.reason });
         let wbody; try { wbody = work.buildWork(a.kind, a); } catch (e) { return json(res, 400, { error: e.message }); }
         // `as` decides which of the two views this lands in: a person posting a job is 'human',
