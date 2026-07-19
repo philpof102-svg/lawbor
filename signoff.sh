@@ -22,6 +22,10 @@ echo ""
 echo "── rating under attack: a real collusion ring, moving real money ──────────────────────"
 node sim/rating.js
 
+echo ""
+echo "── the bounty loop: a bot breaks, pays to get fixed, and prices the fixer ──────────────"
+node sim/bounty.js
+
 echo "== 4/4 fuzz smoke (120 random histories, all invariants) =="
 node sim/fuzz.js --scenarios 120 --actions 30
 

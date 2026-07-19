@@ -40,7 +40,8 @@
     "sim:org": "node sim/dynamic-org.js",
     "fuzz": "node sim/fuzz.js",
     "oracle": "node sim/oracle.js",
-    "sim:rating": "node sim/rating.js"
+    "sim:rating": "node sim/rating.js",
+    "sim:bounty": "node sim/bounty.js"
   },
   "keywords": [
     "mcp",
