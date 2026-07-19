@@ -100,7 +100,8 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <div class="jobbar" id="jobbar" hidden>
       <span style="color:var(--dim);font-size:11px">propose work →</span>
       <input id="jid" placeholder="job id" style="width:110px">
-      <input id="jtask" placeholder="what needs doing" style="flex:1">
+      <input id="jtask" placeholder="what needs doing (fix, review, suggest…)" style="flex:1">
+      <input id="jref" placeholder="code link (repo/issue/PR, optional)" style="width:200px">
       <button class="ghost" id="jpost">Post job</button>
     </div>
     <div class="toast" id="toast"></div>
@@ -148,7 +149,9 @@ function usdc(micro){
 function jobCard(w, mine, from, tags){
   var head={help_wanted:'JOB OFFERED', bid:'BID', award:'AWARDED', cancel:'CANCELLED', settle:'PAID'}[w.kind]||w.kind;
   var body='';
-  if(w.kind==='help_wanted') body=esc(w.task||'')+(w.dependsOn&&w.dependsOn.length?'<div class="id">waits on: '+esc(w.dependsOn.join(', '))+'</div>':'');
+  if(w.kind==='help_wanted') body=esc(w.task||'')
+    +(w.ref?'<div class="id">code: <a href="'+esc(w.ref)+'" target="_blank" rel="noopener noreferrer">'+esc(w.ref.replace(/^https?:\\/\\//,''))+'</a></div>':'')
+    +(w.dependsOn&&w.dependsOn.length?'<div class="id">waits on: '+esc(w.dependsOn.join(', '))+'</div>':'');
   else if(w.kind==='bid') body=esc(w.price||'')+(w.eta?' · '+esc(w.eta):'');
   else if(w.kind==='award') body='to '+esc(short(w.worker))+' · '+esc(w.price||'');
   else if(w.kind==='cancel') body=esc(w.reason||'');
@@ -156,7 +159,9 @@ function jobCard(w, mine, from, tags){
     // The claim is a POINTER to a chain fact, so we show the hash and let anyone check it themselves.
     // The state shown is the fold's, never the sender's word: an unverified claim must not look paid.
     var v=(jobState[w.jobId]==='settled');
-    body=usdc(w.amountMicro)+'<div class="id">'+(v?'✓ verified on Base':'⏳ not verified here yet — confers nothing')+'</div>'+
+    body=usdc(w.amountMicro)
+      +(w.deliverable?'<div class="id">for: <a href="'+esc(w.deliverable)+'" target="_blank" rel="noopener noreferrer">'+esc(w.deliverable.replace(/^https?:\\/\\//,''))+'</a> (unverified pointer)</div>':'')
+      +'<div class="id">'+(v?'✓ verified on Base':'⏳ not verified here yet — confers nothing')+'</div>'+
          '<div class="id"><a href="https://basescan.org/tx/'+esc(w.txHash||'')+'" target="_blank" rel="noopener noreferrer">'+esc(short(w.txHash||''))+'</a></div>'+
          '<div class="id" style="opacity:.7">paid — not delivered, and not a judgement of the work</div>';
   }
@@ -190,13 +195,17 @@ $('msgs').addEventListener('click', function(e){
     var amt=prompt('the exact USDC amount transferred (e.g. 18.5)'); if(!amt) return;
     var micro=String(Math.round(parseFloat(amt)*1e6));
     if(!/^\d+$/.test(micro)) return toast('that amount is not a number');
-    work('settle',{jobId:b.getAttribute('data-job'), txHash:tx.trim(), amountMicro:micro});
+    var del=prompt('what was delivered — PR / commit link (optional, shown as an unverified pointer)')||'';
+    var f={jobId:b.getAttribute('data-job'), txHash:tx.trim(), amountMicro:micro};
+    if(del.trim()) f.deliverable=del.trim();
+    work('settle',f);
   }
 });
 $('jpost').onclick=function(){
-  var id=$('jid').value.trim(), t=$('jtask').value.trim();
+  var id=$('jid').value.trim(), t=$('jtask').value.trim(), ref=$('jref').value.trim();
   if(!id||!t) return toast('a job needs an id and a task');
-  $('jid').value=''; $('jtask').value=''; work('help_wanted',{jobId:id, task:t});
+  var f={jobId:id, task:t}; if(ref) f.ref=ref;
+  $('jid').value=''; $('jtask').value=''; $('jref').value=''; work('help_wanted',f);
 };
 
 async function load(){

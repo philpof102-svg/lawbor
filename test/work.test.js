@@ -323,6 +323,20 @@ t('a SETTLED upstream still satisfies a dependent job (settled ⊇ awarded)', ()
   assert.equal(dep.ready, true, 'build is settled, so deploy is ready');
 });
 
+t('a CODE BOUNTY carries its two pointers: ref on the job, deliverable on the settle — both opaque', () => {
+  const m = [
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'fix-1', task: 'fix the fold bug', ref: 'https://github.com/x/y/issues/7' })),
+    row(REQ, W1, buildWork('award', { jobId: 'fix-1', worker: W1, price: '500 USDC' })),
+    row(REQ, W1, buildWork('settle', { jobId: 'fix-1', txHash: TX, amountMicro: '500000000', deliverable: 'https://github.com/x/y/pull/8' })),
+  ];
+  const j = foldThread(m, { txFacts: new Map([[TX, fact()]]) }).get('fix-1');
+  assert.equal(j.ref, 'https://github.com/x/y/issues/7', 'the job points at the code');
+  assert.equal(j.settlement.deliverable, 'https://github.com/x/y/pull/8', 'the settlement points at the PR paid for');
+  // and the pointer is NOT what verified it — remove the chain fact and the deliverable claim remains unverified
+  const cold = foldThread(m).get('fix-1');
+  assert.equal(cold.state, 'awarded', 'a deliverable link alone settles NOTHING — only the on-chain fact does');
+});
+
 t('buildWork rejects a malformed txHash and a non-integer amount', () => {
   assert.throws(() => buildWork('settle', { jobId: 'j1', txHash: '0xnope', amountMicro: '1' }), /32-byte tx hash/);
   assert.throws(() => buildWork('settle', { jobId: 'j1', txHash: TX, amountMicro: '1.5' }), /amountMicro/);

@@ -266,8 +266,16 @@ function build(deps = {}) {
    * and it can never change a job's history (which stays derived from the log + the chain). We only ever
    * cache a fact that is ALREADY final (>= MIN_CONF), since confirmations grow and a young one would
    * otherwise be frozen at its birth value forever. */
+  /* LIVE BY DEFAULT (Phil, 2026-07-19: "tu as besoin d'une chaîne, use Base"). The default RPC is the
+   * public Base endpoint — READ-ONLY JSON-RPC, no key, no account, no sends, so defaulting it on adds
+   * zero custody risk and removes the silent failure mode where every node ships blind and every zero
+   * standing is really "nobody configured an RPC". Opt out explicitly with LAWBOR_RPC_URL=off (air-gapped
+   * or test rigs); point LAWBOR_RPC_URL at your own endpoint if the public one rate-limits you. The
+   * reader still self-checks eth_chainId==8453 and refuses everything on a mis-pointed URL. */
+  const rpcUrl = process.env.LAWBOR_RPC_URL === 'off' ? null
+    : (process.env.LAWBOR_RPC_URL || 'https://mainnet.base.org');
   const chain = deps.chain !== undefined ? deps.chain
-    : createChainReader({ rpcUrl: process.env.LAWBOR_RPC_URL, fetch: doFetch });
+    : createChainReader({ rpcUrl, fetch: doFetch });
   const MIN_CONF_CACHE = 12;
   const txFacts = new Map();
   const factsFile = deps.txFactsFile !== undefined ? deps.txFactsFile
@@ -403,7 +411,7 @@ function build(deps = {}) {
           const j = work.foldThread(store.all(), { txFacts }).get(a.jobId);
           settled = {
             verified: !!(j && j.settlement),
-            note: !chain ? 'no chain reader configured (LAWBOR_RPC_URL unset) — this settlement can never verify here, and confers no credit'
+            note: !chain ? 'no chain reader configured (LAWBOR_RPC_URL=off) — this settlement can never verify here, and confers no credit'
               : (j && j.settlement) ? 'verified against Base — settled means PAID, not delivered'
               : 'not verified (yet): unknown tx, too few confirmations, or a from/to/amount mismatch. Confers no credit until it verifies.',
           };
@@ -453,7 +461,7 @@ function build(deps = {}) {
           jobs: state ? jobs.filter((j) => j.state === state) : jobs,
           verifiesSettlements: !!chain,
           note: 'negotiation + settlement PROOF. A job is settled only when a Base USDC tx matching the signed award verifies on-chain; settled means PAID, never delivered.'
-            + (chain ? '' : ' No chain reader configured here (LAWBOR_RPC_URL unset), so no settlement can verify on this node.'),
+            + (chain ? '' : ' No chain reader configured here (LAWBOR_RPC_URL=off), so no settlement can verify on this node.'),
         });
       }
 
