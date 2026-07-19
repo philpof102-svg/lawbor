@@ -891,13 +891,27 @@ module.exports = { build };
 if (require.main === module) {
   // ship the built-in free apps by default on a standalone node: the org-graph viewer, a node digest,
   // and a stateless two-agent game (proof that you ship on it — see PLATFORM.md).
-  const { server, startHeartbeat } = build({ apps: [
+  const { server, node, startHeartbeat } = build({ apps: [
     require('./apps/orggraph'), require('./apps/standup'), require('./apps/tictactoe'),
     require('./apps/premium-feed'),   // PREMIUM: refused (fail-closed) until LAWBOR_PAY_TO + a verifier are wired
   ] });
   const PORT = Number(process.env.PORT || 4830);
   server.listen(PORT, () => {
-    console.log('LAWBOR bot on :' + PORT + ' — self ' + SELF + ' — reputation-gated, descriptor-only. Set LAWBOR_ADDR + a signer to go live.');
+    /* SAY WHAT IS MISSING, not a fixed sentence. This line used to end with "Set LAWBOR_ADDR + a signer
+     * to go live" unconditionally — printed verbatim at a node that had BOTH correctly set, which is an
+     * instruction to do something already done. An external tester flagged it, and it is the same defect
+     * as `delivered` and `verifiesSettlements` in miniature: a message describing a state it never
+     * checked. Now it reports what this process can actually do, and only asks for what is absent. */
+    const missing = [];
+    if (SELF === '0x0000000000000000000000000000000000000000') missing.push('LAWBOR_ADDR (this node has no address)');
+    if (!node.originatesSigned) missing.push('LAWBOR_SIGNER (unsigned envelopes are refused by any authenticating peer)');
+    // not authenticating has two causes — viem absent, or the operator asked for it with
+    // LAWBOR_ALLOW_UNAUTHENTICATED=1. Only the operator knows which, so the line names both rather than
+    // guessing, and says what it COSTS either way.
+    if (!node.relay.authenticates) missing.push('a signature verifier — an inbound sender is an unverified claim (npm install viem, or unset LAWBOR_ALLOW_UNAUTHENTICATED)');
+    console.log('LAWBOR bot on :' + PORT + ' — self ' + SELF + ' — reputation-gated, descriptor-only.'
+      + (missing.length ? '\n  ⚠️  still needed to go live: ' + missing.join(' · ')
+        : '\n  ✓ signs its own envelopes' + (node.relay.authenticates ? ' and authenticates inbound peers' : '')));
     // Liveness + pruning only happen because something drives them; mesh.js schedules nothing.
     if (process.env.LAWBOR_BEAT !== '0') startHeartbeat();
     if (process.env.LAWBOR_ALLOW_UNAUTHENTICATED === '1') {
