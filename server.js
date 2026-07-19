@@ -140,12 +140,22 @@ function build(deps = {}) {
    * could disagree: relay said "forward", the transport had no url, the envelope silently vanished,
    * and the human was still told delivered:true. mesh.js now owns addr→url, the relay reads it
    * through peers(), and the transport resolves through urlFor() — they cannot drift. */
+  /* ONBOARDING POLICY — LAWBOR_ADMIT=probation lets addresses MainStreet has never indexed join and
+   * SPEAK (they still earn nothing: conservation makes a stranger worth 0, and consent still gates the
+   * inbox). Default stays proceed-only, which is the strict historical behaviour. Measured reason this
+   * exists: four real wallets — one with 2241 txs — were all refused, because MainStreet returns score
+   * `null` for anything outside its own index, so a newcomer can never build the history admission
+   * demands. See lib/relay.js for the full argument. */
+  const admitProbation = deps.admitProbation !== undefined ? deps.admitProbation
+    : process.env.LAWBOR_ADMIT === 'probation';
+
   const mesh = deps.mesh || createMesh({
     self,
     preflight: deps.preflight || mainstreetPreflight,
     verify: deps.verify || ((url) => fetchDiscoveryCard(url, doFetch, { allowLoopback, allowPrivate })),
     minScore: deps.minScore || MIN_SCORE,
     anchors: parseAnchors(process.env.LAWBOR_ANCHORS),
+    admitProbation,
     allowInsecure, allowLoopback, allowPrivate,
   });
 
@@ -180,7 +190,7 @@ function build(deps = {}) {
     ? deps.allowUnauthenticated : process.env.LAWBOR_ALLOW_UNAUTHENTICATED === '1';
   const node = createNode({ self, human: deps.human || process.env.LAWBOR_HUMAN || null,
     preflight: deps.preflight || mainstreetPreflight, minScore: deps.minScore || MIN_SCORE, send, store,
-    verifySig: deps.verifySig, allowUnauthenticated,
+    verifySig: deps.verifySig, allowUnauthenticated, admitProbation,
     // the relay READS the mesh's book and delegates fan-out to it — it no longer keeps its own
     peers: () => mesh.addrs(),
     selectTargets: (to, opts) => mesh.selectTargets(to, opts) });
@@ -356,7 +366,7 @@ function build(deps = {}) {
     try {
       // verifiesSettlements is reported next to authenticatesSenders on purpose: both are "is this node
       // actually checking, or just accepting?" A node with no chain reader rates nothing, and says so.
-      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, verifiesSettlements: !!chain, consentLocal: true });
+      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, verifiesSettlements: !!chain, consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only' });
       if (req.method === 'GET' && url === '/.well-known/lawbor.json') return json(res, 200, { v: 1, addr: node.self, accept: '/lawbor/accept', minScore: MIN_SCORE, oracle: 'MainStreet', note: 'reputation-gated bot messaging' });
       // the installable agent skill: how to orchestrate a dynamic, trust-gated org on this node.
       if (req.method === 'GET' && url === '/skill.md') {
