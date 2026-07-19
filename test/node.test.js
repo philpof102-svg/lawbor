@@ -29,7 +29,13 @@ const lowScore = async () => ({ decision: 'PROCEED', score: 5 });
   let firstEnv;
   await t('human say() → recorded origin:human, envelope built (descriptor to sign), transported to peer', async () => {
     const r = await nodeA.say(B, 'gm bob, from phil');
-    assert.equal(r.delivered, true); assert.equal(r.sign.signed, false);
+    // THE DISTINCTION, pinned. This assertion used to read `delivered === true` against a stub transport
+    // that reports nothing — so it was measuring "our gate forwarded it" while claiming to measure "the
+    // peer received it". The same confusion shipped, and an external tester got delivered:true on a
+    // cross-node probe where the remote node had dropped the envelope and stored nothing.
+    assert.equal(r.forwarded, true, 'our gate agreed to forward');
+    assert.equal(r.delivered, null, 'and a transport that reports nothing leaves delivery UNKNOWN — never assumed true');
+    assert.equal(r.sign.signed, false);
     assert.equal(sent.length, 1); assert.equal(sent[0].to, B.toLowerCase());
     firstEnv = r.envelope; assert.equal(firstEnv.viaHuman, 'phil');
   });

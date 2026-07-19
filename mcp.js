@@ -75,10 +75,10 @@ async function dispatch(msg, deps = {}) {
           payload = { self: node.self, peers: node.peers(), minScore: node.relay.minScore, maxHops: node.relay.maxHops, oracle: 'MainStreet preflight (fail-closed)', note: 'descriptor-only: the operator signs every envelope' };
         } else if (name === 'lawbor_say') {
           const r = await node.say(a.to, a.body, { thread: a.thread });
-          payload = { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, reason: r.reason || null, sign: r.sign };
+          payload = { id: r.envelope.id, thread: r.envelope.thread, forwarded: r.forwarded, delivered: r.delivered, targets: r.targets || [], reason: r.reason || null, sign: r.sign };
         } else if (name === 'lawbor_bot_say') {
           const r = await node.botSay(a.to, a.body, { thread: a.thread });
-          payload = { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign };
+          payload = { id: r.envelope.id, thread: r.envelope.thread, forwarded: r.forwarded, delivered: r.delivered, targets: r.targets || [], sign: r.sign };
         } else if (name === 'lawbor_inbox') {
           payload = { view: 'inbox', threads: node.store.inbox(node.self, a.limit || 50) };
         } else if (name === 'lawbor_watch') {
@@ -155,7 +155,7 @@ async function dispatch(msg, deps = {}) {
           if (!may.ok) return ok({ content: [{ type: 'text', text: 'refused: ' + may.reason }], isError: true });
           const wbody = work.buildWork(kind, a);
           const r = a.as === 'human' ? await node.say(a.to, wbody, {}) : await node.botSay(a.to, wbody, {});
-          payload = { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, reason: r.reason || null, sign: r.sign };
+          payload = { id: r.envelope.id, thread: r.envelope.thread, forwarded: r.forwarded, delivered: r.delivered, targets: r.targets || [], reason: r.reason || null, sign: r.sign };
         } else return err(-32602, `unknown tool: ${name}`);
         return ok({ content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false });
       } catch (e) { return ok({ content: [{ type: 'text', text: `tool error: ${e.message}` }], isError: true }); }

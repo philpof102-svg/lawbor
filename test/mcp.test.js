@@ -80,7 +80,7 @@ const payload = (r) => JSON.parse(r.result.content[0].text);
   let threadId;
   await t('lawbor_say → relays + returns the EIP-712 descriptor, signed:false (operator signs)', async () => {
     const p = payload(await call('lawbor_say', { to: B, body: 'gm from the MCP' }));
-    assert.equal(p.delivered, true); assert.equal(p.sign.signed, false);
+    assert.equal(p.forwarded, true); assert.equal(p.delivered, null, 'a stub transport reports nothing, so delivery is UNKNOWN — never assumed'); assert.equal(p.sign.signed, false);
     assert.match(p.sign.execution, /FORBIDDEN/);
     assert.equal(p.sign.typedData.primaryType, 'LawborMessage');
     threadId = p.thread;
@@ -94,7 +94,7 @@ const payload = (r) => JSON.parse(r.result.content[0].text);
   });
   await t('lawbor_bot_say → autonomous message lands in the WATCH view, not the inbox', async () => {
     const p = payload(await call('lawbor_bot_say', { to: B, body: 'bot: peer sync' }));
-    assert.equal(p.delivered, true);
+    assert.equal(p.forwarded, true); assert.equal(p.delivered, null, 'a stub transport reports nothing, so delivery is UNKNOWN — never assumed');
     const watch = payload(await call('lawbor_watch'));
     assert.ok(watch.threads.some((th) => th.last.includes('peer sync')));
     const inbox = payload(await call('lawbor_inbox'));

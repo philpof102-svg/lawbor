@@ -40,7 +40,7 @@ const mk = (self, extra = {}) => {
     assert.equal(n.originatesSigned, false, 'reported, not hidden');
     const r = await n.say(B, 'gm');
     assert.equal(r.envelope.sig, undefined);
-    assert.equal(r.delivered, true, 'the old behaviour is untouched for anyone not wiring a signer');
+    assert.equal(r.forwarded, true, 'the old behaviour is untouched for anyone not wiring a signer');
   });
 
   await t('with a signer the envelope carries a signature BEFORE it is dispatched', async () => {
@@ -48,7 +48,7 @@ const mk = (self, extra = {}) => {
     assert.equal(n.originatesSigned, true);
     const r = await n.say(B, 'gm');
     assert.equal(r.envelope.sig, '0x' + A.slice(2).toLowerCase() + 'f'.repeat(90));
-    assert.equal(r.delivered, true);
+    assert.equal(r.forwarded, true);
   });
 
   await t('botSay signs too — an autonomous message is not a second-class citizen', async () => {

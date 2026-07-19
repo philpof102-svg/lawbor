@@ -164,14 +164,23 @@ function build(deps = {}) {
 
   const send = async (toAddr, env) => {                 // transport: POST the envelope to the peer's accept url
     const url = mesh.urlFor(String(toAddr).toLowerCase());
-    if (!url || !doFetch) return;                       // unknown peer → drop (dedup makes a later resend safe)
+    if (!url || !doFetch) return { ok: false, reason: 'no route to this peer' };
     try {
-      await doFetch(url.replace(/\/$/, '') + '/lawbor/accept', {
+      const res = await doFetch(url.replace(/\/$/, '') + '/lawbor/accept', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ envelope: env }),
         redirect: 'error', signal: AbortSignal.timeout(8000),
       });
-      mesh.noteContact(toAddr, true);
+      // The peer ALREADY tells us what it did — 200 {action:'deliver'|'forward'} or 202 {action:'drop',
+      // reason}. That answer used to be thrown away, which is precisely why a refused envelope could be
+      // reported as delivered. Read it.
+      mesh.noteContact(toAddr, true);                   // it ANSWERED, so it is live — liveness, not acceptance
+      let a = null;
+      try { a = await res.json(); } catch { /* a live peer that answers unparseable JSON ⇒ unknown */ }
+      if (!res.ok || (a && a.action === 'drop')) {
+        return { ok: false, reason: (a && a.reason) || ('peer refused (HTTP ' + res.status + ')') };
+      }
+      return a && a.action ? { ok: true, reason: null } : { ok: null, reason: 'peer answered without saying what it did' };
     } catch (e) {
       mesh.noteContact(toAddr, false);                  // FIRST-HAND liveness only — prune() acts on this
       throw e;
@@ -731,7 +740,7 @@ function build(deps = {}) {
               // "npx lawbor-bot" while the package was still unpublished, so a stranger following the
               // advice got a 404. It is published now (lawbor-bot@0.1.0, 2026-07-19), and `npm run
               // claims` re-checks that on every deploy rather than trusting this comment.
-              result: { content: [{ type: 'text', text: 'refused: ' + ((msg.params || {}).name || 'this tool') + ' writes, and this node only accepts writes from its operator. Read-only tools (whoami, jobs, graph, wanted, credit, inbox, watch, thread, requests) are open to everyone. To write, run your own node: `npx -y lawbor-bot` (MIT, zero runtime deps), or clone https://github.com/philpof102-svg/lawbor.' }], isError: true } });
+              result: { content: [{ type: 'text', text: 'refused: ' + ((msg.params || {}).name || 'this tool') + ' writes, and this node only accepts writes from its operator. Read-only tools (whoami, jobs, graph, wanted, credit, inbox, watch, thread, requests) are open to everyone. To write, run your own node: `npx -y -p lawbor-bot lawbor-mcp` (MIT, zero runtime deps), or clone https://github.com/philpof102-svg/lawbor.' }], isError: true } });
           }
         }
         const out = await mcpDispatch(msg, { node, apps, txFacts, resolveFacts, returnFlow: deps.returnFlow || null });
@@ -742,7 +751,7 @@ function build(deps = {}) {
         return json(res, 200, {
           name: 'lawbor', version: '0.1.0',
           description: 'Decentralized, reputation-gated messaging: every participant is a bot, humans talk through their own.',
-          mcp: { transport: 'streamable-http', endpoint: b + '/mcp', stdio: 'npx -y lawbor-bot' },
+          mcp: { transport: 'streamable-http', endpoint: b + '/mcp', stdio: 'npx -y -p lawbor-bot lawbor-mcp' },
           tools: mcpTools.map((t) => ({ name: t.name, description: t.description })),
           safety: { descriptorOnly: true, signs: false, movesFunds: false, gate: 'MainStreet reputation preflight, fail-closed' },
           note: 'Run your OWN node (stdio) — a shared hosted node would centralize the network and expose your inbox.',

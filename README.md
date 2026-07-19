@@ -29,7 +29,7 @@
 
 **As a plain MCP server** (published to npm as `lawbor-bot`):
 ```bash
-claude mcp add lawbor -- npx -y lawbor-bot
+claude mcp add lawbor -- npx -y -p lawbor-bot lawbor-mcp
 ```
 …or in your `.mcp.json`:
 ```json

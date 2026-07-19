@@ -92,10 +92,18 @@ const probe = async (url, init) => {
       const r = await probe(url);
       r.ok ? ok('refusal points at a URL that exists: ' + url) : bad('refusal points at a DEAD url: ' + url + ' (' + (r.err || r.status) + ')');
     }
-    // skip npx flags (-y, --yes, …) to reach the actual package specifier
-    const npx = text.match(/npx\s+(?:-{1,2}[a-z-]+\s+)*([@a-z0-9][a-z0-9@/._-]*)/i);
+    /* Parse the npx invocation the way NPX does, not the way it reads.
+     * `npx -y <pkg>` runs the bin NAMED <pkg>. `npx -y -p <pkg> <bin>` runs <bin> FROM <pkg> — which is
+     * how you invoke a package whose bin has a different name, and it is what we now tell people,
+     * because it works against the version actually on the registry instead of the one we hope to
+     * publish. Teaching the audit only the first form would make it fail a command that works, and this
+     * file has already been burned twice for crying wolf. */
+    const dashP = text.match(/npx\s+(?:-{1,2}[a-z-]+\s+)*?-p\s+([@a-z0-9][a-z0-9@/._-]*)\s+([a-z0-9][a-z0-9@/._-]*)/i);
+    const plain = text.match(/npx\s+(?:-{1,2}[a-z-]+\s+)*([@a-z0-9][a-z0-9@/._-]*)/i);
+    const npx = dashP || plain;
     if (npx) {
       const pkg = npx[1].replace(/[.,;:!?]+$/, '');
+      const wantBin = (dashP ? npx[2] : npx[1]).replace(/[.,;:!?]+$/, '');
       /* PUBLISHED IS NOT RUNNABLE. This check used to stop at "does the registry know this name?" and
        * gave a green tick to `npx -y lawbor-bot`, which died with "could not determine executable to
        * run": npx can only resolve a bin whose NAME matches the package, and neither bin was called
@@ -107,9 +115,9 @@ const probe = async (url, init) => {
         const meta = await r.body.json();
         const latest = meta.versions[meta['dist-tags'].latest] || {};
         const bins = Object.keys(latest.bin || {});
-        bins.includes(pkg)
-          ? ok('`npx ' + pkg + '` resolves — the package declares a bin of that name')
-          : bad('`npx ' + pkg + '` CANNOT RUN: published, but no bin is named "' + pkg + '" (bins: ' + (bins.join(', ') || 'none') + ') — npx answers "could not determine executable to run"');
+        bins.includes(wantBin)
+          ? ok('`npx … ' + wantBin + '` resolves — ' + pkg + ' declares a bin of that name')
+          : bad('`npx … ' + wantBin + '` CANNOT RUN: ' + pkg + ' is published, but declares no bin named "' + wantBin + '" (bins: ' + (bins.join(', ') || 'none') + ') — npx answers "could not determine executable to run"');
       }
     }
   } else bad('/mcp unreachable');
