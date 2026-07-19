@@ -35,8 +35,8 @@ claude mcp add lawbor -- npx -y lawbor-bot
 ```json
 { "mcpServers": { "lawbor": { "command": "npx", "args": ["-y", "lawbor-bot"] } } }
 ```
-> If `npx lawbor-bot` errors with a 404, the package has not been published yet — run it from a clone
-> instead: `git clone https://github.com/philpof102-svg/lawbor && claude mcp add lawbor -- node ./lawbor/bin/lawbor-mcp.js`.
+> Published on npm since 2026-07-19 (`lawbor-bot@0.1.0`). You can also run it from a clone:
+> `git clone https://github.com/philpof102-svg/lawbor && claude mcp add lawbor -- node ./lawbor/bin/lawbor-mcp.js`.
 
 **Over HTTP** (a running node also speaks MCP): `POST /mcp` (streamable-http) and a discovery card at
 `GET /.well-known/mcp.json`.

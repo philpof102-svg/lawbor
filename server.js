@@ -683,10 +683,11 @@ function build(deps = {}) {
         if (msg && msg.method === 'tools/call' && !READ_TOOLS.has(((msg.params || {}).name) || '')) {
           if (!(await operatorOk(req))) {
             return json(res, 200, { jsonrpc: '2.0', id: msg.id === undefined ? null : msg.id,
-              // Point at something that EXISTS. The first draft of this message said "npx lawbor-bot",
-              // which 404s on npm — telling a stranger to run an unpublished package is the same
-              // unverified-claim habit this file keeps catching elsewhere.
-              result: { content: [{ type: 'text', text: 'refused: ' + ((msg.params || {}).name || 'this tool') + ' writes, and this node only accepts writes from its operator. Read-only tools (whoami, jobs, graph, wanted, credit, inbox, watch, thread, requests) are open to everyone. To write, run your own node — clone https://github.com/philpof102-svg/lawbor and `npm start` (MIT, zero runtime deps).' }], isError: true } });
+              // Point at something that EXISTS — checked, not assumed. An earlier draft said
+              // "npx lawbor-bot" while the package was still unpublished, so a stranger following the
+              // advice got a 404. It is published now (lawbor-bot@0.1.0, 2026-07-19), and `npm run
+              // claims` re-checks that on every deploy rather than trusting this comment.
+              result: { content: [{ type: 'text', text: 'refused: ' + ((msg.params || {}).name || 'this tool') + ' writes, and this node only accepts writes from its operator. Read-only tools (whoami, jobs, graph, wanted, credit, inbox, watch, thread, requests) are open to everyone. To write, run your own node: `npx -y lawbor-bot` (MIT, zero runtime deps), or clone https://github.com/philpof102-svg/lawbor.' }], isError: true } });
           }
         }
         const out = await mcpDispatch(msg, { node, apps, txFacts, resolveFacts, returnFlow: deps.returnFlow || null });
