@@ -337,6 +337,56 @@ t('a CODE BOUNTY carries its two pointers: ref on the job, deliverable on the se
   assert.equal(cold.state, 'awarded', 'a deliverable link alone settles NOTHING — only the on-chain fact does');
 });
 
+// ---- validate: the on-chain penny-drop (prove the rail before the money crosses it) ---------------
+console.log('\nLAWBOR work — validate (the bank micro-deposit, on-chain):');
+const VTX = '0x' + 'cd'.repeat(32);
+const vfact = (over) => ({ chainId: 8453, token: USDC_BASE, from: REQ, to: W1, valueMicro: '0', confirmations: 12, blockTime: 1700000000, ...over });
+
+t('BUG FIX: a ZERO-value transfer can no longer settle a job (it would have shown PAID for nothing)', () => {
+  assert.throws(() => buildWork('settle', { jobId: 'j1', txHash: TX, amountMicro: '0' }), /non-zero amount/);
+});
+
+t('a zero-value transfer between the two parties validates the PATH', () => {
+  const m = [...awarded(), row(REQ, W1, buildWork('validate', { jobId: 'j1', txHash: VTX }))];
+  const j = foldThread(m, { txFacts: new Map([[VTX, vfact()]]) }).get('j1');
+  assert.equal(j.pathValidated, true, 'a real 0 USDC transfer really crossed between them');
+  assert.equal(j.validations[0].amountMicro, '0', 'zero is the normal amount here');
+  assert.equal(j.state, 'awarded', 'and it is NOT a payment — the state must not move');
+});
+
+t('DIRECTION IS THE PROOF: requester→worker does NOT prove the worker holds the key', () => {
+  const m = [...awarded(), row(REQ, W1, buildWork('validate', { jobId: 'j1', txHash: VTX }))];
+  const j = foldThread(m, { txFacts: new Map([[VTX, vfact({ from: REQ, to: W1 })]]) }).get('j1');
+  assert.equal(j.pathValidated, true);
+  assert.equal(j.payeeProved, false, 'sending TO an address proves nothing about who controls it');
+});
+
+t('a tx signed BY the worker proves the payee controls that address — the payer\'s real question', () => {
+  const m = [...awarded(), row(W1, REQ, buildWork('validate', { jobId: 'j1', txHash: VTX }))];
+  const j = foldThread(m, { txFacts: new Map([[VTX, vfact({ from: W1, to: REQ })]]) }).get('j1');
+  assert.equal(j.payeeProved, true, 'only the payee signing proves the payee holds the key');
+});
+
+t('a validation with a THIRD party, wrong chain or wrong token does not validate', () => {
+  const m = [...awarded(), row(REQ, W1, buildWork('validate', { jobId: 'j1', txHash: VTX }))];
+  for (const bad of [{ to: W2 }, { chainId: 1 }, { token: '0x' + '00'.repeat(20) }, { confirmations: 2 }]) {
+    const j = foldThread(m, { txFacts: new Map([[VTX, vfact(bad)]]) }).get('j1');
+    assert.equal(j.pathValidated, false, 'must not validate on ' + Object.keys(bad)[0]);
+  }
+});
+
+t('a validation NEVER becomes standing — it costs only gas, so it must buy no reputation', () => {
+  const m = [...awarded(), row(W1, REQ, buildWork('validate', { jobId: 'j1', txHash: VTX }))];
+  const facts = new Map([[VTX, vfact({ from: W1, to: REQ })]]);
+  assert.equal(settlementsFrom(m, { txFacts: facts }).length, 0, 'no credit edge from a handshake');
+});
+
+t('only the two parties may validate; a stranger cannot', () => {
+  const m = [...awarded(), row(W2, REQ, buildWork('validate', { jobId: 'j1', txHash: VTX }))];
+  const j = foldThread(m, { txFacts: new Map([[VTX, vfact()]]) }).get('j1');
+  assert.equal(j.validations.length, 0);
+});
+
 t('buildWork rejects a malformed txHash and a non-integer amount', () => {
   assert.throws(() => buildWork('settle', { jobId: 'j1', txHash: '0xnope', amountMicro: '1' }), /32-byte tx hash/);
   assert.throws(() => buildWork('settle', { jobId: 'j1', txHash: TX, amountMicro: '1.5' }), /amountMicro/);

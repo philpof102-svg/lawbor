@@ -311,7 +311,10 @@ function build(deps = {}) {
     const wanted = [];
     for (const m of messages) {
       const w = work.parseWork(m && m.body);
-      if (w && w.kind === 'settle' && w.txHash && !txFacts.has(w.txHash)) wanted.push(w.txHash);
+      // BOTH verbs cite a txHash. Resolving only `settle` left every `validate` permanently unverified —
+      // invisible to the unit tests, which inject txFacts directly, and caught only by running it live
+      // against Base. Any verb that names a transaction must be resolved here, or it silently never works.
+      if (w && (w.kind === 'settle' || w.kind === 'validate') && w.txHash && !txFacts.has(w.txHash)) wanted.push(w.txHash);
     }
     for (const h of [...new Set(wanted)].slice(0, budget)) {
       try { const f = await chain.checkTx(h); if (f) rememberFact(h, f); } catch {}
@@ -415,7 +418,18 @@ function build(deps = {}) {
         // For a settle, resolve the chain fact right away and report HONESTLY whether it verified. A
         // settle that cannot be checked is not an error (the tx may simply be young) but the caller must
         // never be left believing a rating edge exists when none does.
-        let settled = undefined;
+        let settled = undefined, validated = undefined;
+        if (a.kind === 'validate') {
+          // resolve the handshake immediately and report the DIRECTION honestly — a caller must never
+          // read 'validated' as 'this payee holds their key' when the tx went the other way.
+          await resolveFacts([{ body: wbody }], 1);
+          const jv = work.foldThread(store.all(), { txFacts }).get(a.jobId);
+          validated = { pathValidated: !!(jv && jv.pathValidated), payeeProved: !!(jv && jv.payeeProved),
+            note: !chain ? 'no chain reader — this handshake can never verify here'
+              : (jv && jv.payeeProved) ? 'the PAYEE signed it: they control that address'
+              : (jv && jv.pathValidated) ? 'a real transfer crossed between you, but it was NOT signed by the payee — it does not prove they hold that key'
+              : 'not verified: unknown tx, too few confirmations, or not a USDC transfer between these two parties' };
+        }
         if (a.kind === 'settle') {
           await resolveFacts([{ body: wbody }], 1);
           const j = work.foldThread(store.all(), { txFacts }).get(a.jobId);
@@ -426,7 +440,7 @@ function build(deps = {}) {
               : 'not verified (yet): unknown tx, too few confirmations, or a from/to/amount mismatch. Confers no credit until it verifies.',
           };
         }
-        return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason || null, ...(settled ? { settled } : {}) });
+        return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason || null, ...(settled ? { settled } : {}), ...(validated ? { validated } : {}) });
       }
 
       /* THE WANTED BOARD — the open, claimable frontier, each poster annotated with OUR OWN verified
@@ -446,7 +460,11 @@ function build(deps = {}) {
           trust: {
             paidUsMicro: String(wc.inbound.get(j.requester) || 0),
             wePaidThemMicro: String(wc.direct.get(j.requester) || 0),
-            note: 'verified on Base, OUR history only — 0 means no history with us, not a bad mark',
+            // the penny-drop, kept SEPARATE from standing on purpose: it costs only gas, so it proves a
+            // live rail and a held key — never that anyone is good for the money.
+            pathValidated: !!j.pathValidated,
+            payeeProved: !!j.payeeProved,
+            note: 'verified on Base, OUR history only — 0 means no history with us, not a bad mark. pathValidated/payeeProved are a zero-value handshake, NOT standing.',
           },
         }));
         return json(res, 200, {
