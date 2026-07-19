@@ -18,6 +18,10 @@ node sim/interaction.js
 echo "== 3/4 dynamic-org sim (self-rewriting graph) =="
 node sim/dynamic-org.js
 
+echo ""
+echo "── rating under attack: a real collusion ring, moving real money ──────────────────────"
+node sim/rating.js
+
 echo "== 4/4 fuzz smoke (120 random histories, all invariants) =="
 node sim/fuzz.js --scenarios 120 --actions 30
 

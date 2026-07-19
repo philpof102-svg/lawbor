@@ -238,6 +238,22 @@ t('buildWork strips a self-dependency and dedupes, and an unknown dep just block
   assert.deepEqual(jobs.get('z').blockedBy, ['up', 'ghost'], 'unknown upstreams block until they exist+award');
 });
 
+t('REGRESSION: an award sharing a millisecond with its help_wanted is not dropped', () => {
+  // Found by the live multi-node rating sim, invisible to every test that sets rxAt by hand. rxAt is a
+  // millisecond, so two relayed messages can share one; the id tie-break then decides the order, and a
+  // single-pass fold silently discarded a mutation that landed before its job was created.
+  const hw = { id: '0xffff', thread: 't', from: REQ, to: W1, ts: 1, rxAt: 5000, body: buildWork('help_wanted', { jobId: 'j1', task: 't' }) };
+  const aw = { id: '0x0001', thread: 't', from: REQ, to: W1, ts: 1, rxAt: 5000, body: buildWork('award', { jobId: 'j1', worker: W1, price: '5 USDC' }) };
+  const j = foldThread([hw, aw]).get('j1');   // aw sorts FIRST on the id tie-break
+  assert.equal(j.state, 'awarded', 'the award must survive arriving in the same millisecond as the job');
+  assert.equal(j.award.worker, W1.toLowerCase());
+});
+
+t('a mutation for a job that appears NOWHERE is still ignored — two passes invent nothing', () => {
+  const orphan = { id: '0x1', thread: 't', from: REQ, to: W1, ts: 1, rxAt: 1000, body: buildWork('award', { jobId: 'ghost', worker: W1, price: '5 USDC' }) };
+  assert.equal(foldThread([orphan]).size, 0);
+});
+
 // ---- settle: bind a job to a REAL, refutable Base USDC transfer (the unforgeable primitive) --------
 console.log('\nLAWBOR work — settle (job ↔ verified Base USDC tx), the input to the rating:');
 const { settlementsFrom, USDC_BASE } = require('../lib/work');
