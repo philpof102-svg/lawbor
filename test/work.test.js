@@ -381,14 +381,48 @@ t('a validation NEVER becomes standing — it costs only gas, so it must buy no 
   assert.equal(settlementsFrom(m, { txFacts: facts }).length, 0, 'no credit edge from a handshake');
 });
 
-t('only the two parties may validate; a stranger cannot', () => {
+t('ANYONE may cite a validation — and citing it proves nothing the chain does not already say', () => {
+  // Deliberately unrestricted: a validate is a pointer to public chain data, so gating who may show it
+  // buys no security, and gating it broke the case that matters (a candidate proving their key BEFORE
+  // the award, when they are not yet a "party"). What a stranger CANNOT do is change what it proves.
   const m = [...awarded(), row(W2, REQ, buildWork('validate', { jobId: 'j1', txHash: VTX }))];
-  const j = foldThread(m, { txFacts: new Map([[VTX, vfact()]]) }).get('j1');
-  assert.equal(j.validations.length, 0);
+  const cited = foldThread(m, { txFacts: new Map([[VTX, vfact({ from: REQ, to: W1 })]]) }).get('j1');
+  assert.equal(cited.validations.length, 1, 'a third party may cite it');
+  assert.equal(cited.pathValidated, true, 'because the chain says that transfer really happened');
+  assert.equal(cited.payeeProved, false, 'but it was signed by the requester, so it proves nothing about the payee');
+  // and a stranger citing a tx the chain does not back proves nothing at all
+  const bogus = foldThread(m, {}).get('j1');
+  assert.equal(bogus.validations[0].verified, false);
+  assert.equal(bogus.pathValidated, false);
 });
 
 // ---- the key-proof guard: refuse to COMMIT to an address nobody has proven they control ----------
 console.log('\nLAWBOR work — key-proof guard on AWARD (the last moment a rule can prevent the loss):');
+
+t('REGRESSION: a validate arriving BEFORE the award still sets payeeProved (order-independent)', () => {
+  // The useful case IS this order — prove the key, THEN commit. Deciding it inline during the fold made
+  // it depend on arrival order, so a pre-award proof was silently lost. Now overlaid in a second pass.
+  const m = [
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'ord', task: 't' }), 1000),
+    row(W1, REQ, buildWork('validate', { jobId: 'ord', txHash: VTX }), 2000),      // proof FIRST
+    row(REQ, W1, buildWork('award', { jobId: 'ord', worker: W1, price: '5 USDC' }), 3000),
+  ];
+  const facts = new Map([[VTX, vfact({ from: W1, to: REQ })]]);
+  assert.equal(foldThread(m, { txFacts: facts }).get('ord').payeeProved, true);
+  // and the same messages in any order fold to the same answer
+  assert.equal(foldThread([...m].reverse(), { txFacts: facts }).get('ord').payeeProved, true);
+});
+
+t('key proof is GLOBAL: a tx unrelated to this job still proves its signer holds the key', () => {
+  // proving a key must work BEFORE an award, when the job has no worker yet — so it cannot depend on
+  // the tx being "between the job parties". Whoever shows you the tx, the signer really signed it.
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'g', task: 't' })),
+             row(REQ, W1, buildWork('validate', { jobId: 'g', txHash: VTX }))];
+  const facts = new Map([[VTX, vfact({ from: W2, to: REQ })]]);   // W2 is not a party to this job
+  const j = foldThread(m, { txFacts: facts }).get('g');
+  assert.equal(j.pathValidated, false, 'not this job rail');
+  assert.ok(provenFrom(m, { txFacts: facts }).has(W2.toLowerCase()), 'but W2 is proven to hold its key');
+});
 
 t('provenFrom derives key control at the ADDRESS level, from the tx SIGNER only', () => {
   const m = [...awarded(), row(W1, REQ, buildWork('validate', { jobId: 'j1', txHash: VTX }))];

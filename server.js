@@ -438,12 +438,19 @@ function build(deps = {}) {
           // resolve the handshake immediately and report the DIRECTION honestly — a caller must never
           // read 'validated' as 'this payee holds their key' when the tx went the other way.
           await resolveFacts([{ body: wbody }], 1);
-          const jv = work.foldThread(store.all(), { txFacts }).get(a.jobId);
+          const allMsgs = store.all();
+          const jv = work.foldThread(allMsgs, { txFacts }).get(a.jobId);
+          // key control is GLOBAL, so report it from provenFrom — saying 'not verified' because the tx
+          // was not on this job's rail would hide the very proof the caller just supplied.
+          const provenNow = work.provenFrom(allMsgs, { txFacts });
+          const signer = ((jv && jv.validations || []).find((x) => x.txHash === (JSON.parse(wbody).txHash)) || {}).from || null;
           validated = { pathValidated: !!(jv && jv.pathValidated), payeeProved: !!(jv && jv.payeeProved),
+            signer, signerProvenKey: !!(signer && provenNow.has(signer)),
             note: !chain ? 'no chain reader — this handshake can never verify here'
               : (jv && jv.payeeProved) ? 'the PAYEE signed it: they control that address'
               : (jv && jv.pathValidated) ? 'a real transfer crossed between you, but it was NOT signed by the payee — it does not prove they hold that key'
-              : 'not verified: unknown tx, too few confirmations, or not a USDC transfer between these two parties' };
+              : signer ? 'verified on Base: ' + signer + ' signed it, so THAT address is proven to hold its key. It is not this job rail (the two parties did not both take part), so pathValidated stays false.'
+              : 'not verified: unknown tx, too few confirmations, or not a USDC transfer on Base' };
         }
         if (a.kind === 'settle') {
           await resolveFacts([{ body: wbody }], 1);
