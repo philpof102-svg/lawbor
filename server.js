@@ -37,6 +37,9 @@ const beat = require('./lib/beat');
 const work = require('./lib/work');
 const { createChainReader } = require('./lib/chain');
 const { creditFor } = require('./lib/credit');
+// OPTIONAL signature verifier (viem, lazily loaded). Absent ⇒ the relay stays fail-closed on inbound
+// peers, which /health reports. See lib/verify.js for why the crypto is not hand-rolled here.
+const { createVerifier, verifierStatus } = require('./lib/verify');
 // The MCP surface. server.js advertised /mcp and /.well-known/mcp.json for weeks while BOTH returned
 // 500 'mcpDispatch is not defined' — this module was never required. The suite missed it because
 // test/mcp.test.js imports ../mcp directly and never went through the HTTP server. A machine-readable
@@ -190,7 +193,8 @@ function build(deps = {}) {
     ? deps.allowUnauthenticated : process.env.LAWBOR_ALLOW_UNAUTHENTICATED === '1';
   const node = createNode({ self, human: deps.human || process.env.LAWBOR_HUMAN || null,
     preflight: deps.preflight || mainstreetPreflight, minScore: deps.minScore || MIN_SCORE, send, store,
-    verifySig: deps.verifySig, allowUnauthenticated, admitProbation,
+    // deps.verifySig wins (tests inject their own); otherwise use viem if the operator installed it.
+    verifySig: deps.verifySig || createVerifier() || undefined, allowUnauthenticated, admitProbation,
     // the relay READS the mesh's book and delegates fan-out to it — it no longer keeps its own
     peers: () => mesh.addrs(),
     selectTargets: (to, opts) => mesh.selectTargets(to, opts) });
@@ -374,7 +378,7 @@ function build(deps = {}) {
     try {
       // verifiesSettlements is reported next to authenticatesSenders on purpose: both are "is this node
       // actually checking, or just accepting?" A node with no chain reader rates nothing, and says so.
-      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, verifiesSettlements: !!chain, consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only' });
+      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, verifier: verifierStatus(), verifiesSettlements: !!chain, consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only' });
       /* The node's public face. The ERC-8004 card declares a `web` service at `/`, and `/` used to
        * 404 — a registration promising an endpoint that does not answer is the exact placeholder
        * pathology that card is written to avoid. Serving it is therefore not decoration. */
