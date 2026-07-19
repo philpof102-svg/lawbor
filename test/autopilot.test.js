@@ -188,5 +188,60 @@ t('OFF by default, bounded when on, deduped across parents', () => {
   assert.equal(new Set(w.map((x) => x.jobId)).size, w.length, 'x is queued once, not once per parent');
 });
 
+// ---- BUG BOUNTIES: a bot pays to get ITSELF fixed (Phil's ask) --------------------------------------
+console.log('\nLAWBOR autopilot — bug bounties from the bot\'s OWN repeated failures:');
+const { decideBounty, noteFailure, failureKey } = require('../lib/autopilot');
+
+t('a ONE-OFF failure is noise, not a bug — no bounty', () => {
+  const led = noteFailure(new Map(), 'relay timeout to 0xabc123def456');
+  assert.equal(decideBounty(led, { postBounty: true, bountyAfter: 3 }).length, 0);
+});
+
+t('the SAME failure repeated crosses the threshold and becomes a bounty', () => {
+  const led = new Map();
+  for (let i = 0; i < 3; i++) noteFailure(led, 'store.record threw: disk full', 'https://github.com/x/y');
+  const b = decideBounty(led, { postBounty: true, bountyAfter: 3, bountyBudget: '25 USDC' });
+  assert.equal(b.length, 1);
+  assert.match(b[0].task, /BUG BOUNTY \(my bot failed 3× on this\): store.record threw/);
+  assert.deepEqual(b[0].tags, ['bug', 'bounty']);
+  assert.equal(b[0].budgetHint, '25 USDC');
+  assert.equal(b[0].ref, 'https://github.com/x/y');
+});
+
+t('varying addresses/numbers collapse to ONE bug — the same fault is not three faults', () => {
+  const led = new Map();
+  noteFailure(led, 'send failed to 0xaaaaaaaaaaaa after 3 tries');
+  noteFailure(led, 'send failed to 0xbbbbbbbbbbbb after 7 tries');
+  noteFailure(led, 'send failed to 0xcccccccccccc after 12 tries');
+  assert.equal(led.size, 1, 'collapsed by failureKey');
+  assert.equal([...led.values()][0].count, 3);
+  assert.equal(decideBounty(led, { postBounty: true }).length, 1);
+});
+
+t('OFF by default — spending the operator\'s money on repairs is opt-in', () => {
+  const led = new Map();
+  for (let i = 0; i < 9; i++) noteFailure(led, 'always broken');
+  assert.equal(decideBounty(led, {}).length, 0);
+});
+
+t('asked ONCE: a posted bounty is never re-offered, however broken the bot stays', () => {
+  const led = new Map();
+  for (let i = 0; i < 5; i++) noteFailure(led, 'always broken');
+  const first = decideBounty(led, { postBounty: true });
+  assert.equal(first.length, 1);
+  led.get(first[0].key).posted = true;                 // what tick() does after sending
+  for (let i = 0; i < 50; i++) noteFailure(led, 'always broken');
+  assert.equal(decideBounty(led, { postBounty: true }).length, 0, 'a permanently broken bot must not spam the board');
+});
+
+t('bounded and deterministic: most-broken first, one per tick', () => {
+  const led = new Map();
+  for (let i = 0; i < 4; i++) noteFailure(led, 'minor fault');
+  for (let i = 0; i < 9; i++) noteFailure(led, 'major fault');
+  const b = decideBounty(led, { postBounty: true, maxBountyPerTick: 1 });
+  assert.equal(b.length, 1);
+  assert.match(b[0].task, /major fault/, 'the worst one is asked about first');
+});
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exitCode = fail ? 1 : 0;
