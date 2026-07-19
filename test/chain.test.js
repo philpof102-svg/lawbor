@@ -162,6 +162,24 @@ function fakeRpc(over = {}) {
     }
   });
 
+  await t('PUBLIC-NODE GUARD: MCP read tools stay open, write tools are refused to strangers', async () => {
+    /* Found by auditing the node AFTER deploying it publicly: /say, /bot/say, /work, /peers and every
+     * MCP write tool were reachable by anyone on the internet — enough to make the node speak under its
+     * operator's address, or fill its store. Loopback (this test) is trusted, so the read/write SPLIT is
+     * what is asserted here; the remote half is fail-closed by operatorOk with no verifyAuth wired. */
+    const call = (name, args) => fetch(`http://localhost:${port}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args || {} } }) }).then((r) => r.json());
+    const read = await call('lawbor_wanted');
+    assert.equal(read.result.isError, false, 'a read tool must stay open — that is what the ERC-8004 card advertises');
+    // and the classification is default-DENY: an unknown/new tool counts as a write
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    assert.match(src, /READ_TOOLS\.has/, 'the gate exists');
+    assert.match(src, /Default-deny: a tool not on the read list is a write/, 'and is default-deny, so a new tool is not silently public');
+    for (const w of ['lawbor_say', 'lawbor_post_job', 'lawbor_settle', 'lawbor_block']) {
+      assert.ok(!/lawbor_(say|post_job|settle|block)/.test([...'x'].join('') + src.match(/const READ_TOOLS = new Set\(\[[^\]]*\]/)[0]), w + ' must NOT be on the read list');
+    }
+  });
+
   await t('the root page shows the node\'s HONEST state, not a brochure', async () => {
     const r = await fetch(`http://localhost:${port}/`);
     assert.equal(r.status, 200);

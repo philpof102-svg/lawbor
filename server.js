@@ -478,6 +478,7 @@ function build(deps = {}) {
       // ungated side-door that made every defence in mesh.js decorative. It now goes through
       // mesh.addPeer: url policy, discovery-card match, reputation gate, first-write-wins, cap.
       if (req.method === 'POST' && url === '/peers') {
+        if (!(await operatorOk(req))) return denyOperator(res); 
         const a = await body(req) || {};
         if (!a.addr || !a.url) return json(res, 400, { error: 'addr + url required' });
         const r = await mesh.addPeer(a.addr, a.url, { source: 'operator', confirm: a.confirm === true });
@@ -495,13 +496,16 @@ function build(deps = {}) {
       // What WE will disclose in return: a bounded, non-transitive sample. Never the full table.
       if (req.method === 'GET' && url === '/lawbor/peers') return json(res, 200, { peers: sharePeers(3) });
 
-      if (req.method === 'POST' && url === '/say') { const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.say(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason }); }
-      if (req.method === 'POST' && url === '/bot/say') { const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.botSay(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, delivered: r.delivered }); }
+      if (req.method === 'POST' && url === '/say') {
+        if (!(await operatorOk(req))) return denyOperator(res);  const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.say(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason }); }
+      if (req.method === 'POST' && url === '/bot/say') {
+        if (!(await operatorOk(req))) return denyOperator(res);  const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.botSay(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, delivered: r.delivered }); }
 
       /* WORK — the three verbs. State is DERIVED from the message log by folding it, so there is no
        * job table to drift out of sync with what was actually said. The actor rules are checked HERE,
        * before the envelope is built: a rule enforced only when rendering is decorative. */
       if (req.method === 'POST' && url === '/work') {
+        if (!(await operatorOk(req))) return denyOperator(res); 
         const a = await body(req) || {};
         if (!a.to || !a.kind) return json(res, 400, { error: 'to + kind required' });
         const wMsgs = store.all();
@@ -663,6 +667,21 @@ function build(deps = {}) {
       if (req.method === 'POST' && url === '/mcp') {
         const msg = await body(req);
         if (!msg) return json(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } });
+        /* READ tools stay OPEN — publishing a discoverable MCP endpoint is the entire point of the
+         * ERC-8004 card, and a stranger reading /wanted or /credit costs us nothing.
+         * WRITE tools are operator-gated, because on a PUBLIC node they are the same hole the HTTP
+         * write routes had: anyone could make this node speak under its operator's address, or fill its
+         * store. Gating is loopback-trusted and fail-closed remotely (no verifyAuth wired ⇒ refused), so
+         * a local operator is unaffected and the internet gets a read-only surface — which is exactly
+         * what this deployment claims to be. Default-deny: a tool not on the read list is a write. */
+        const READ_TOOLS = new Set(['lawbor_whoami', 'lawbor_inbox', 'lawbor_watch', 'lawbor_thread',
+          'lawbor_requests', 'lawbor_jobs', 'lawbor_graph', 'lawbor_wanted', 'lawbor_credit']);
+        if (msg && msg.method === 'tools/call' && !READ_TOOLS.has(((msg.params || {}).name) || '')) {
+          if (!(await operatorOk(req))) {
+            return json(res, 200, { jsonrpc: '2.0', id: msg.id === undefined ? null : msg.id,
+              result: { content: [{ type: 'text', text: 'refused: ' + ((msg.params || {}).name || 'this tool') + ' writes, and this node only accepts writes from its operator. Read-only tools (whoami, jobs, graph, wanted, credit, inbox, watch, thread, requests) are open. Run your own node to write: npx lawbor-bot' }], isError: true } });
+          }
+        }
         const out = await mcpDispatch(msg, { node, apps, txFacts, resolveFacts, returnFlow: deps.returnFlow || null });
         return out ? json(res, 200, out) : res.writeHead(204, CORS) || res.end();   // notification → 204
       }
