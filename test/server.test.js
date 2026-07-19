@@ -20,6 +20,18 @@ const t = (n, fn) => Promise.resolve().then(fn).then(() => { pass++; console.log
 const A = '0x' + 'aa'.repeat(20), B = '0x' + 'bb'.repeat(20);
 const dbA = path.join(os.tmpdir(), 'lawbor-srvA-' + process.pid + '.jsonl');
 const dbB = path.join(os.tmpdir(), 'lawbor-srvB-' + process.pid + '.jsonl');
+/* START FROM EMPTY, and clean the CONTROL log too.
+ * A pid is not a unique run id — Windows recycles them — and the teardown at the bottom of this file
+ * only unlinks the .jsonl, never the sibling .control that holds CONSENT. So an accepted-sender row
+ * could outlive its run and be inherited by a later one that drew the same pid, at which point "first
+ * contact lands in REQUESTS" is testing a contact that is no longer first. Measured: 318 stale
+ * lawbor-srv*.control files had accumulated in the temp dir on this machine.
+ * Honest limit: seeding that exact file for the exact pid did NOT reproduce the intermittent failure
+ * this file showed once, so this is a real defect but NOT a proven diagnosis of that one. Fixed because
+ * it is wrong on its own terms, not because it closes the case. */
+for (const f of [dbA, dbB, dbA + '.control', dbB + '.control', dbA + '.subs', dbB + '.subs']) {
+  try { fs.unlinkSync(f); } catch { /* absent is the normal case */ }
+}
 const proceed = async () => ({ decision: 'PROCEED', score: 75 });
 const avoid = async () => ({ decision: 'AVOID', score: 2 });
 
@@ -230,7 +242,12 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
   });
 
   botA.server.close(); botB.server.close();
-  for (const f of [dbA, dbB]) { try { fs.unlinkSync(f); } catch {} }
+  // symmetric with the setup: the control and subs siblings are cleaned too. Teardown alone was never
+  // enough anyway — a run that crashes or is killed never reaches this line, which is exactly how the
+  // stale files accumulated. Starting from empty is what actually guarantees it; this just tidies.
+  for (const f of [dbA, dbB, dbA + '.control', dbB + '.control', dbA + '.subs', dbB + '.subs']) {
+    try { fs.unlinkSync(f); } catch {}
+  }
 
   console.log(`\n${pass} passed · ${fail} failed`);
   process.exit(fail ? 1 : 0);
