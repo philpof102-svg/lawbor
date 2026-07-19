@@ -34,7 +34,6 @@ const { buildEnvelope } = require('./lib/envelope');
 const LIB = path.join(__dirname, 'lib');
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const norm = (s) => String(s).replace(/\r\n/g, '\n');          // a CRLF checkout must not change a hash
-const canon = (v) => JSON.stringify(v, Object.keys(v || {}).sort ? undefined : undefined);
 
 let FAIL_CLOSED = async () => {};
 const checks = [];
@@ -85,7 +84,12 @@ const TX = (n) => '0x' + String(n).padStart(64, '0');
   for (let i = 0; i < 64; i++) perms.push(digest(shuffle(log, rand)));
   record('fold.order-independent', [base], [...new Set(perms)],
     '64 seeded shuffles of a log whose timestamps all collide must fold to one identical digest');
-  record('fold.digest', 'stable', base.slice(0, 16) === base.slice(0, 16) ? 'stable' : 'unstable', 'sanity');
+  /* `fold.digest` USED TO LIVE HERE and it was a tautology: `base.slice(0,16) === base.slice(0,16)`,
+   * which is x === x, so it emitted "stable" whatever the fold did. A check that cannot fail is worse
+   * than no check — it occupies the slot where a real one would go and reports green forever. Signal B
+   * found it by reading the harness rather than trusting its output, which is exactly what a second
+   * signal is for. Deleted rather than repaired: fold.order-independent below already asserts that all
+   * 64 permutations collapse to ONE digest, which is the property this pretended to check. */
   checks.push({ id: 'fold.value', ok: true, expected: base.slice(0, 16), actual: base.slice(0, 16),
     note: 'THE digest itself — if two machines differ here, the fold is machine-dependent' });
 }
@@ -218,7 +222,11 @@ const TX = (n) => '0x' + String(n).padStart(64, '0');
     'every lib/ module required with ALL non-builtin resolution disabled — this is the zero-dependency claim, tested rather than grepped');
   record('lib.no-hand-rolled-crypto', [], crypto包,
     'a subtly wrong ecrecover does not crash, it silently accepts forgeries');
-  record('lib.files', 14, files.length, 'module count — a divergence here means the checkouts differ');
+  /* `lib.files` — a hard-coded count of 14 modules — USED TO BE HERE. Signal B called it a canary
+   * rather than an invariant, and was right: adding one honest module to lib/ would make two machines
+   * disagree and LOOK like a finding, when `git rev-parse` already answers "are these the same
+   * checkout" perfectly. A check that manufactures false divergence, inside a tool whose entire output
+   * IS divergence, is worse than no check at all. Removed. */
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -229,18 +237,29 @@ const TX = (n) => '0x' + String(n).padStart(64, '0');
   record('pkg.bins', ['lawbor-bot', 'lawbor-mcp', 'lawbor-node'], Object.keys(pkg.bin || {}).sort(),
     'npx resolves a bin whose NAME matches the package — lawbor-bot must exist or `npx lawbor-bot` cannot run');
   record('pkg.no-hard-deps', [], Object.keys(pkg.dependencies || {}),
-    'viem belongs in optionalDependencies; a hard dep would break the zero-dependency claim');
-  const mustShip = ['lib/', 'SKILL.md', 'examples/'];
-  record('pkg.ships-what-it-promises', [], mustShip.filter((f) => !(pkg.files || []).includes(f)),
-    'SKILL.md and the signer example are useless if the tarball omits them');
-}
+    'a hard dependency would break the zero-dependency claim the core makes');
+  /* AND THE OTHER HALF, which the previous version quietly did not check: viem must actually BE in
+   * optionalDependencies. "no hard deps" stayed green on the commit where viem was declared NOWHERE —
+   * the exact state in which a fresh install produces authenticatesSenders:false and a mesh that can
+   * accept nobody. Two different properties were wearing one name. */
+  record('pkg.viem-is-optional', true, !!(pkg.optionalDependencies || {}).viem,
+    'declared optional means a fresh `npm install` gets a node that can authenticate; absent means a mesh nobody can join');
 
-function await0(p) { // the relay's accept is async; this file must stay synchronous to hash in order
-  let v, done = false;
-  p.then((x) => { v = x; done = true; });
-  // deasync-free: relay.accept resolves synchronously for these paths (no injected network)
-  if (!done) { const s = require('child_process'); }
-  return v || { action: 'PENDING' };
+  /* SHIPS, not PROMISES-TO-SHIP. This read pkg.files[] and called it "ships-what-it-promises" — but
+   * files[] is the INTENT, and a mis-cased or mis-globbed entry satisfies the intent while shipping an
+   * empty path. So it now asks npm what the tarball would ACTUALLY contain. Same distinction as
+   * `delivered` vs `forwarded`, and the same lesson: check the outcome, never the instruction. */
+  const mustShip = ['SKILL.md', 'examples/signer-viem.js', 'lib/work.js', 'structure.cjs'];
+  let packed = null;
+  try {
+    const out = require('child_process').execFileSync('npm', ['pack', '--dry-run', '--json'],
+      { cwd: __dirname, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], shell: process.platform === 'win32' });
+    packed = new Set((JSON.parse(out)[0].files || []).map((f) => String(f.path).replace(/\\/g, '/')));
+  } catch (e) { packed = null; }
+  record('pkg.ships-what-it-promises',
+    packed ? [] : ['npm pack unavailable — UNVERIFIED, and reported as such rather than assumed green'],
+    packed ? mustShip.filter((f) => !packed.has(f)) : ['npm pack unavailable — UNVERIFIED, and reported as such rather than assumed green'],
+    'what the TARBALL contains, read from `npm pack --dry-run --json` — not what package.json intends to contain');
 }
 
 // ---------------------------------------------------------------------------------------------
