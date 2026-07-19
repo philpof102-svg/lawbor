@@ -435,6 +435,7 @@ function build(deps = {}) {
           viewer: node.self,
           direct: [...c.direct.entries()].sort((a, b) => b[1] - a[1]).map(([addr, m]) => ({ addr, usdcMicro: String(m) })),
           circle: [...c.circle.entries()].sort((a, b) => b[1] - a[1]).map(([addr, m]) => ({ addr, usdcMicro: String(m) })),
+          inbound: [...c.inbound.entries()].sort((a, b) => b[1] - a[1]).map(([addr, m]) => ({ addr, usdcMicro: String(m) })),
           evidence: c.evidence, netted: c.netted,
           verifiesSettlements: !!chain,
           limits: c.limits.concat(RATING_LIMITS),

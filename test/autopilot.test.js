@@ -106,23 +106,30 @@ console.log('\nLAWBOR autopilot — reputation as a risk PREMIUM (and why it is 
 
 t('a stranger is still served, just priced higher — the rating must not freeze the market', () => {
   const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' }))];
-  const d = decideBid(one(m), W1, jobs(m), { bidPrice: 10, unknownRequesterPremium: 1.5, credit: new Map() });
+  const d = decideBid(one(m), W1, jobs(m), { bidPrice: 10, unknownRequesterPremium: 1.5, inbound: new Map() });
   assert.equal(d.bid, true, 'a cold-start bot MUST still bid, or nobody can ever start');
   assert.equal(d.price, '15 USDC');
   assert.match(d.basis, /unknown to us/);
 });
 
-t('a requester who has actually PAID us gets the normal price, and the reason is surfaced', () => {
+t('a requester who has actually PAID us (INBOUND) gets the normal price, and the reason is surfaced', () => {
   const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' }))];
-  const credit = new Map([[REQ.toLowerCase(), 250e6]]);   // they settled 250 USDC with us
-  const d = decideBid(one(m), W1, jobs(m), { bidPrice: 10, unknownRequesterPremium: 1.5, credit });
+  const inbound = new Map([[REQ.toLowerCase(), 250e6]]);   // the REQUESTER settled 250 USDC with us
+  const d = decideBid(one(m), W1, jobs(m), { bidPrice: 10, unknownRequesterPremium: 1.5, inbound });
   assert.equal(d.price, '10 USDC', 'no premium for a proven payer');
   assert.match(d.basis, /settled 250 USDC/);
 });
 
+t('bid uses INBOUND not credit: paying the requester does NOT lower our bid to them', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' }))];
+  // we paid THEM 250 (credit), but they never paid US (inbound empty) → still a stranger for a bid
+  const d = decideBid(one(m), W1, jobs(m), { bidPrice: 10, unknownRequesterPremium: 1.5, credit: new Map([[REQ.toLowerCase(), 250e6]]), inbound: new Map() });
+  assert.equal(d.price, '15 USDC', 'what WE paid them is the wrong direction for a bid');
+});
+
 t('requirePaidRequester refuses strangers — and the reason SAYS it deadlocks a cold-start node', () => {
   const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' }))];
-  const d = decideBid(one(m), W1, jobs(m), { requirePaidRequester: true, credit: new Map() });
+  const d = decideBid(one(m), W1, jobs(m), { requirePaidRequester: true, inbound: new Map() });
   assert.equal(d.bid, false);
   assert.match(d.reason, /cold-start node bids on nothing/, 'an opt-in that can deadlock must say so');
 });

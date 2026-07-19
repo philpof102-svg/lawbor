@@ -90,6 +90,23 @@ t('without a returnFlow reader it nets settlements-only and SAYS SO (fail-honest
   assert.match(c.limits[0], /return-leg netting is OFF/);
 });
 
+t('inbound is the OPPOSITE direction of direct — what an address paid US, not what we paid them', () => {
+  // V paid W 500 (direct); X paid V 300 (inbound). The two must never be confused — a live two-node
+  // run quoted a stranger-premium to a client who had just paid, because it read `direct` for a
+  // question that was about `inbound`.
+  const c = creditFor(V, [edge(V, W, 500e6, 1000, 1), edge(X, V, 300e6, 2000, 2)]);
+  assert.equal(c.direct.get(W), 500e6, 'direct = what V paid');
+  assert.equal(c.direct.get(X), undefined, 'X is not in direct — V never paid X');
+  assert.equal(c.inbound.get(X), 300e6, 'inbound = what X paid V');
+  assert.equal(c.inbound.get(W), undefined, 'W is not in inbound — W never paid V');
+});
+
+t('inbound nets the return leg too, so a refunded client shows no inbound standing', () => {
+  const rf = new Map(); rf.set(V + '|' + X, 300e6);   // V sent 300 back to X
+  const c = creditFor(V, [edge(X, V, 300e6, 1000, 1)], { returnFlow: rf });
+  assert.equal(c.inbound.get(X) || 0, 0, 'X paid 300, V refunded 300 → net inbound 0');
+});
+
 t('deterministic: shuffling the edge order yields the same credit', () => {
   const S = A('55');
   const es = [edge(V, S, 100e6, 1000, 1), edge(S, W, 40e6, 2000, 2), edge(S, X, 40e6, 3000, 3), edge(V, W, 20e6, 1500, 4)];

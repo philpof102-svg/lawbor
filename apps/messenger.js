@@ -108,6 +108,11 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 </main>
 <script>
 var view='inbox', sel=null, self='', threads={inbox:[],requests:[],bot:[]}, lastHash='';
+/* jobState: jobId -> the FOLD's state, never the sender's word. A settle message says "I paid";
+ * only the fold (which checked the tx against Base) says whether it is true, and the card shows that.
+ * standing: addr -> usdc micro THIS node itself verifiably paid them. There is no global score to show;
+ * this is our own history with them and nothing else. */
+var jobState={}, standing={}, verifies=false;
 function $(i){ return document.getElementById(i); }
 function short(a){ a=String(a||''); return a.slice(0,6)+'…'+a.slice(-4); }
 function peerOf(t){ for(var i=0;i<(t.peers||[]).length;i++){ if(String(t.peers[i]).toLowerCase()!==self.toLowerCase()) return t.peers[i]; } return t.peers&&t.peers[0]||''; }
@@ -130,19 +135,37 @@ function preview(b){
   if(kind==='bid') return '💬 bid '+price+(job?' on '+job:'');
   if(kind==='award') return '✅ awarded '+job;
   if(kind==='cancel') return '✖ cancelled '+job;
+  if(kind==='settle') return '💵 paid '+job;
   return kind+' '+job;
 }
+/* usdc micro-units -> a readable amount. Kept exact: these are the numbers a person decides money on,
+ * so no rounding that could show 0.99 as 1. */
+function usdc(micro){
+  var s=String(micro||'0'); while(s.length<7) s='0'+s;
+  var whole=s.slice(0,-6), frac=s.slice(-6).replace(/0+$/,'');
+  return whole+(frac?'.'+frac:'')+' USDC';
+}
 function jobCard(w, mine, from, tags){
-  var head={help_wanted:'JOB OFFERED', bid:'BID', award:'AWARDED', cancel:'CANCELLED'}[w.kind]||w.kind;
+  var head={help_wanted:'JOB OFFERED', bid:'BID', award:'AWARDED', cancel:'CANCELLED', settle:'PAID'}[w.kind]||w.kind;
   var body='';
   if(w.kind==='help_wanted') body=esc(w.task||'')+(w.dependsOn&&w.dependsOn.length?'<div class="id">waits on: '+esc(w.dependsOn.join(', '))+'</div>':'');
   else if(w.kind==='bid') body=esc(w.price||'')+(w.eta?' · '+esc(w.eta):'');
   else if(w.kind==='award') body='to '+esc(short(w.worker))+' · '+esc(w.price||'');
   else if(w.kind==='cancel') body=esc(w.reason||'');
+  else if(w.kind==='settle'){
+    // The claim is a POINTER to a chain fact, so we show the hash and let anyone check it themselves.
+    // The state shown is the fold's, never the sender's word: an unverified claim must not look paid.
+    var v=(jobState[w.jobId]==='settled');
+    body=usdc(w.amountMicro)+'<div class="id">'+(v?'✓ verified on Base':'⏳ not verified here yet — confers nothing')+'</div>'+
+         '<div class="id"><a href="https://basescan.org/tx/'+esc(w.txHash||'')+'" target="_blank" rel="noopener noreferrer">'+esc(short(w.txHash||''))+'</a></div>'+
+         '<div class="id" style="opacity:.7">paid — not delivered, and not a judgement of the work</div>';
+  }
   // the only actions offered are the ones the actor rules would actually allow (mayApply gates them for real)
   var act='';
   if(w.kind==='help_wanted' && !mine) act='<button class="ghost" data-act="bid" data-job="'+esc(w.jobId)+'">Bid on this</button>';
   if(w.kind==='bid' && !mine) act='<button class="ghost" data-act="award" data-job="'+esc(w.jobId)+'" data-worker="'+esc(from)+'" data-price="'+esc(w.price||'')+'">Award to them</button>';
+  // only the requester who signed the award is offered "mark paid", and only while the job is awarded
+  if(w.kind==='award' && mine && jobState[w.jobId]==='awarded') act='<button class="ghost" data-act="settle" data-job="'+esc(w.jobId)+'">I paid this — attach the tx</button>';
   return '<div class="job'+(mine?' mine':'')+'"><div class="k">'+head+'</div><div class="t">'+body+'</div>'+
          '<div class="id">'+esc(w.jobId)+'</div>'+(act?'<div class="act">'+act+'</div>':'')+
          '<div class="meta" style="font-size:10px;color:var(--dim);margin-top:5px">'+esc(short(from))+tags+'</div></div>';
@@ -160,6 +183,15 @@ $('msgs').addEventListener('click', function(e){
   var a=b.getAttribute('data-act');
   if(a==='bid'){ var p=prompt('your price (e.g. 18 USDC)'); if(p) work('bid',{jobId:b.getAttribute('data-job'), price:p}); }
   if(a==='award') work('award',{jobId:b.getAttribute('data-job'), worker:b.getAttribute('data-worker'), price:b.getAttribute('data-price')});
+  if(a==='settle'){
+    // LAWBOR moves nothing: the operator pays from their own wallet and then attaches the proof here.
+    if(!verifies && !confirm('This node has no Base RPC configured (LAWBOR_RPC_URL), so it cannot verify the tx and the payment will confer no standing. Attach it anyway?')) return;
+    var tx=prompt('the Base tx hash of the USDC payment you already sent (0x…)'); if(!tx) return;
+    var amt=prompt('the exact USDC amount transferred (e.g. 18.5)'); if(!amt) return;
+    var micro=String(Math.round(parseFloat(amt)*1e6));
+    if(!/^\d+$/.test(micro)) return toast('that amount is not a number');
+    work('settle',{jobId:b.getAttribute('data-job'), txHash:tx.trim(), amountMicro:micro});
+  }
 });
 $('jpost').onclick=function(){
   var id=$('jid').value.trim(), t=$('jtask').value.trim();
@@ -176,7 +208,13 @@ async function load(){
     var b=await (await fetch('/bot-activity',{cache:'no-store'})).json();
     threads={inbox:i.threads||[], requests:r.threads||[], bot:b.threads||[]};
     $('rbadge').textContent = threads.requests.length ? '('+threads.requests.length+')' : '';
-    var hash=JSON.stringify(threads);
+    verifies=!!h.verifiesSettlements;
+    var jb=await (await fetch('/jobs',{cache:'no-store'})).json();
+    jobState={}; for(var k=0;k<(jb.jobs||[]).length;k++) jobState[jb.jobs[k].jobId]=jb.jobs[k].state;
+    var cr=await (await fetch('/credit',{cache:'no-store'})).json();
+    standing={};
+    for(var d=0;d<(cr.direct||[]).length;d++) standing[cr.direct[d].addr]=cr.direct[d].usdcMicro;
+    var hash=JSON.stringify(threads)+JSON.stringify(jobState)+JSON.stringify(standing);
     if(hash!==lastHash){ lastHash=hash; renderList(); if(sel) openThread(sel,true); }
   }catch(e){}
 }
@@ -224,6 +262,16 @@ async function openThread(id, keep){
       if(w){ html+=jobCard(w, mine, m.from, tags); continue; }   // a work message renders as a job card
       html+='<div class="bub'+(mine?' mine':'')+'">'+esc(m.body)+'<div class="meta">'+esc(short(m.from))+tags+'</div></div>';
     }
+    /* What has THIS person actually been paid BY US, verified on Base. Not a score, not a reputation
+     * someone else vouched for — our own settled history, which is the only claim that cannot be farmed
+     * by a collusion ring (RATING-DESIGN.md). A zero is shown as "none yet", never as a bad mark. */
+    var st=standing[String(peer).toLowerCase()];
+    html='<div class="job" style="opacity:.9"><div class="k">SETTLED WITH YOU</div><div class="t">'+
+      (st&&st!=='0' ? usdc(st) : 'none yet')+'</div><div class="id">'+
+      (st&&st!=='0' ? 'you have verifiably paid them this much on Base' :
+        (verifies ? 'you have never paid them — that is not a bad mark, only an absence' :
+                    'this node cannot verify payments (no LAWBOR_RPC_URL), so nobody shows standing here'))+
+      '</div></div>'+html;
     $('msgs').innerHTML=html||'<div class="empty">no messages</div>';
     $('jobbar').hidden=false;
     $('msgs').scrollTop=$('msgs').scrollHeight;
