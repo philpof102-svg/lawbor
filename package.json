@@ -41,7 +41,8 @@
     "fuzz": "node sim/fuzz.js",
     "oracle": "node sim/oracle.js",
     "sim:rating": "node sim/rating.js",
-    "sim:bounty": "node sim/bounty.js"
+    "sim:bounty": "node sim/bounty.js",
+    "claims": "node claims.cjs"
   },
   "keywords": [
     "mcp",
