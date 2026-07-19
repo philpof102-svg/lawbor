@@ -86,6 +86,39 @@ const envelope = (from, body) => buildEnvelope({ from, to: ME, body, viaHuman: '
     assert.equal(row.probation, true);
   });
 
+  /* THE ORACLE IS NOT ALLOWED TO BE A SINGLE POINT OF FAILURE.
+   * Every inbound envelope on every node used to require a successful HTTP call to one service we
+   * operate — so that service going down stopped the whole mesh, everywhere, for everyone. For a
+   * project whose claim is that no authority decides who exists, that was the authority.
+   * The rule now: an outage is mapped onto the decision the OPERATOR already made, never onto a new one. */
+  const { createRelay } = require('../lib/relay');
+  const { buildEnvelope } = require('../lib/envelope');
+  const env = () => buildEnvelope({ from: STRANGER, to: ME, body: 'hello', viaHuman: null }).envelope;
+  const relay = (cfg) => createRelay({ self: ME, allowUnauthenticated: true, ...cfg });
+  const down = async () => { throw new Error('ECONNREFUSED'); };
+
+  await t('proceed-only + oracle DOWN still fails closed — no score means no decision', async () => {
+    const r = await relay({ preflight: down }).accept(env());
+    assert.equal(r.action, 'drop');
+    assert.match(r.reason, /FAIL CLOSED/);
+  });
+
+  await t('probation + oracle DOWN admits, because this operator already admits unknown senders', async () => {
+    const r = await relay({ preflight: down, admitProbation: true }).accept(env());
+    assert.equal(r.action, 'deliver');
+    assert.equal(r.probation, true);
+    assert.equal(r.senderScore, 0, 'never the oracle\'s null, and never a borrowed score');
+  });
+
+  await t('THE SOUNDNESS ARGUMENT: an outage produces the SAME state as a CAUTION answer, not a new one', async () => {
+    const outage = await relay({ preflight: down, admitProbation: true }).accept(env());
+    const caution = await relay({ preflight: async () => ({ decision: 'CAUTION', score: null }), admitProbation: true }).accept(env());
+    assert.deepEqual(
+      { a: outage.action, p: outage.probation, s: outage.senderScore },
+      { a: caution.action, p: caution.probation, s: caution.senderScore },
+      'if these ever diverge, the outage path has invented a state the operator never chose — which is exactly what "fail open" would be');
+  });
+
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   process.exitCode = fail ? 1 : 0;
 })();
