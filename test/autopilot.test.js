@@ -101,5 +101,52 @@ t('a cancelled or awarded job draws no further action', () => {
   assert.equal(plan(m, W1).length, 0);
 });
 
+// ---- the closed loop: settled payments feed the rating, and the rating prices the next job ---------
+console.log('\nLAWBOR autopilot — reputation as a risk PREMIUM (and why it is not a wall):');
+
+t('a stranger is still served, just priced higher — the rating must not freeze the market', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' }))];
+  const d = decideBid(one(m), W1, jobs(m), { bidPrice: 10, unknownRequesterPremium: 1.5, credit: new Map() });
+  assert.equal(d.bid, true, 'a cold-start bot MUST still bid, or nobody can ever start');
+  assert.equal(d.price, '15 USDC');
+  assert.match(d.basis, /unknown to us/);
+});
+
+t('a requester who has actually PAID us gets the normal price, and the reason is surfaced', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' }))];
+  const credit = new Map([[REQ.toLowerCase(), 250e6]]);   // they settled 250 USDC with us
+  const d = decideBid(one(m), W1, jobs(m), { bidPrice: 10, unknownRequesterPremium: 1.5, credit });
+  assert.equal(d.price, '10 USDC', 'no premium for a proven payer');
+  assert.match(d.basis, /settled 250 USDC/);
+});
+
+t('requirePaidRequester refuses strangers — and the reason SAYS it deadlocks a cold-start node', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' }))];
+  const d = decideBid(one(m), W1, jobs(m), { requirePaidRequester: true, credit: new Map() });
+  assert.equal(d.bid, false);
+  assert.match(d.reason, /cold-start node bids on nothing/, 'an opt-in that can deadlock must say so');
+});
+
+t('a PROVEN worker can beat a marginally cheaper stranger — but only within an explicit tolerance', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' })),
+             row(W1, REQ, buildWork('bid', { jobId: 'j1', price: '21 USDC' })),   // proven, slightly dearer
+             row(W2, REQ, buildWork('bid', { jobId: 'j1', price: '20 USDC' }))];  // stranger, cheapest
+  const credit = new Map([[W1.toLowerCase(), 500e6]]);
+  const off = decideAward(one(m), REQ, { minBidsBeforeAward: 2, credit });
+  assert.equal(off.worker, W2.toLowerCase(), 'tolerance 0 (default) = pure cheapest-wins, unchanged');
+  const on = decideAward(one(m), REQ, { minBidsBeforeAward: 2, credit, provenWorkerTolerance: 0.1 });
+  assert.equal(on.worker, W1.toLowerCase(), '21 is within 10% of 20, so the proven worker wins');
+  assert.match(on.basis, /settled 500 USDC/);
+});
+
+t('the proven-worker rule stays deterministic and never exceeds the tolerance', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' })),
+             row(W1, REQ, buildWork('bid', { jobId: 'j1', price: '40 USDC' })),   // proven but way dearer
+             row(W2, REQ, buildWork('bid', { jobId: 'j1', price: '20 USDC' }))];
+  const credit = new Map([[W1.toLowerCase(), 500e6]]);
+  const a = decideAward(one(m), REQ, { minBidsBeforeAward: 2, credit, provenWorkerTolerance: 0.1 });
+  assert.equal(a.worker, W2.toLowerCase(), 'standing does not buy an unbounded premium');
+});
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exitCode = fail ? 1 : 0;
