@@ -136,6 +136,26 @@ function fakeRpc(over = {}) {
     assert.ok(!w.wanted.find((x) => x.jobId === 'idx'), 'a settled job is no longer wanted');
   });
 
+  await t('ERC-8004: the registration file is served, and claims only what is TRUE of this node', async () => {
+    const c = await get('/.well-known/agent-registration.json');
+    assert.equal(c.type, 'https://eips.ethereum.org/EIPS/eip-8004#registration-v1');
+    assert.equal(c.active, true);
+    assert.ok(c.services.some((s) => s.type === 'MCP' && /\/mcp$/.test(s.url)), 'a REAL live endpoint — 85-97% of registrations in the wild are placeholders');
+    assert.deepEqual(c.registrations, [], 'no agentId is fabricated: minting the ERC-721 is a signed tx nothing here performs');
+    assert.equal(c.image, undefined, 'no image is invented — a broken link IS the placeholder pathology');
+    assert.match(c['x-lawbor'].incomplete, /not fully spec-conformant/, 'and the gap is disclosed, not hidden');
+  });
+
+  await t('ERC-8004: the REFUSAL to write reputation is machine-readable, with its reason', async () => {
+    // The refusal must survive in the artefact itself, not only in a code comment nobody reads.
+    const c = await get('/.well-known/agent-registration.json');
+    assert.equal(c['x-lawbor'].writesToErc8004ReputationRegistry, false);
+    assert.match(c['x-lawbor'].whyNot, /second address defeats/, 'the attack is named');
+    assert.match(c['x-lawbor'].whyNot, /59-91%/, 'and the measured evidence is cited');
+    assert.match(c['x-lawbor'].trustModel, /no global score exists/);
+    assert.ok(/\/credit$/.test(c['x-lawbor'].evidenceEndpoint), 'we point at re-verifiable evidence instead');
+  });
+
   await t('the txFacts cache holds only FINAL facts, and is a cache of chain data (not our state)', async () => {
     const lines = fs.readFileSync(facts, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
     assert.ok(lines.length >= 1);

@@ -376,6 +376,69 @@ function build(deps = {}) {
       // actually checking, or just accepting?" A node with no chain reader rates nothing, and says so.
       if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, verifiesSettlements: !!chain, consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only' });
       if (req.method === 'GET' && url === '/.well-known/lawbor.json') return json(res, 200, { v: 1, addr: node.self, accept: '/lawbor/accept', minScore: MIN_SCORE, oracle: 'MainStreet', note: 'reputation-gated bot messaging' });
+      /* ERC-8004 registration file — DISCOVERY ONLY, and the refusal is the point.
+       * ================================================================================================
+       * ERC-8004 ("Trustless Agents") is the emerging standard for agent identity/reputation/validation,
+       * and its Identity half is genuinely useful: any A2A or MCP agent can find this node without
+       * knowing anything about LAWBOR. So we serve the domain-control registration file.
+       *
+       * WE DO NOT WRITE INTO ITS REPUTATION REGISTRY, and that is a deliberate, measured refusal.
+       * The registry's only write rule is "the submitter MUST NOT be the agent owner" — which a second
+       * address defeats for the price of gas. That is the collusion our own adversarial round killed
+       * (see RATING-DESIGN.md), and the first empirical study of the deployed ecosystem (Xiong et al.,
+       * data through 2026-05-13, Ethereum/BSC/Base) found it happening at scale:
+       *   - 73.5% / 59.2% / 90.6% of reviewers show COORDINATED SYBIL behaviour;
+       *   - after removing Sybil-flagged feedback, 15.8% / 77.9% / 86.8% of rated agents have NO valid
+       *     feedback left;
+       *   - the authors conclude the registry "cannot function as a trust signal": feedback is "rarely
+       *     grounded in verifiable interactions" and "reputation can be manipulated at minimal cost".
+       * Publishing a number into it would launder our conservation-bounded rating into exactly the
+       * farmable shape we refused to build. We expose the EVIDENCE instead (GET /credit), which anyone
+       * can re-verify against Base and refute.
+       *
+       * The same study found only 3% / 4% / 15% of registrations expose a live endpoint — the rest are
+       * placeholders. So `active:true` here is only worth anything because it is true; we omit fields we
+       * cannot honestly fill rather than pointing at a 404, which is precisely that pathology. */
+      if (req.method === 'GET' && url === '/.well-known/agent-registration.json') {
+        const host = String(req.headers.host || '').replace(/[^\w.:\-\[\]]/g, '');
+        const base = process.env.LAWBOR_PUBLIC_URL || ((allowInsecure ? 'http://' : 'https://') + host);
+        const card = {
+          type: 'https://eips.ethereum.org/EIPS/eip-8004#registration-v1',
+          name: 'LAWBOR node ' + String(node.self).slice(0, 10),
+          description: 'Reputation-gated agent messaging and a job market whose outcomes are proven PAID '
+            + 'by verified USDC settlements on Base. Holds no key and moves no funds: every write returns '
+            + 'an EIP-712 descriptor for the operator to sign.',
+          services: [
+            { type: 'MCP', url: base + '/mcp' },
+            { type: 'web', url: base + '/' },
+          ],
+          active: true,
+        };
+        // Only claim what is true of THIS node.
+        if (paywall) card.x402Support = true;
+        // An on-chain agentId exists only if the operator minted the ERC-721 themselves — a signed
+        // transaction, which nothing here does. Never fabricate one.
+        const agentId = process.env.LAWBOR_AGENT_ID || null;
+        card.registrations = agentId ? [{ agentId }] : [];
+        if (process.env.LAWBOR_AGENT_IMAGE) card.image = process.env.LAWBOR_AGENT_IMAGE;
+
+        /* `supportedTrust` is a spec enum we have not verified the exact members of, and guessing a
+         * plausible-looking value is how a file becomes confidently wrong. Our trust model goes in a
+         * namespaced field instead, where it cannot be mistaken for a standard claim. */
+        card['x-lawbor'] = {
+          trustModel: 'conservation-bounded, viewer-relative settlement credit — no global score exists',
+          evidenceEndpoint: base + '/credit',
+          wantedBoard: base + '/wanted',
+          skill: base + '/skill.md',
+          verifiesSettlementsOnBase: !!chain,
+          admits: admitProbation ? 'probation' : 'proceed-only',
+          writesToErc8004ReputationRegistry: false,
+          whyNot: 'its only write rule is that the submitter is not the agent owner, which a second address defeats for the price of gas. Measured in the wild at 59-91% coordinated-Sybil reviewers (Xiong et al. 2026). We publish re-verifiable evidence instead of a score.',
+          incomplete: process.env.LAWBOR_AGENT_IMAGE ? undefined : 'no `image` is set, so this file is not fully spec-conformant. A broken image link would make this the placeholder registration the ecosystem is already full of.',
+        };
+        return json(res, 200, card);
+      }
+
       // the installable agent skill: how to orchestrate a dynamic, trust-gated org on this node.
       if (req.method === 'GET' && url === '/skill.md') {
         try { const md = require('fs').readFileSync(require('path').join(__dirname, 'SKILL.md'), 'utf8'); res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8', 'access-control-allow-origin': '*' }); return res.end(md); }
