@@ -116,6 +116,41 @@ async function fetchDiscoveryCard(url, doFetch, opts = {}) {
   return JSON.parse(text);
 }
 
+/**
+ * LAWBOR_SIGNER=./my-signer.js — the operator's OWN signing module, loaded by path.
+ * ================================================================================================
+ * `sign` has always been injectable, but only programmatically: `build({sign})`. Anyone running the
+ * shipped binary — which is everyone who installs from npm — therefore had NO way to sign, and since
+ * the relay now demands a signature, that meant the published node could never join the mesh it
+ * advertises. The gate was correct and the door was missing.
+ *
+ * 🛑 THIS IS NOT AN ENV-VAR PRIVATE KEY, and the difference is the whole point. We do not name, read,
+ * parse or store a key anywhere; LAWBOR_SIGNER names a FILE THE OPERATOR WROTE, exporting one function
+ * we call. Their key stays inside their module — talking to a wallet, a KMS, a hardware device, or (at
+ * their own risk, in their own code) a local secret. The node still holds nothing. Shipping
+ * `LAWBOR_PRIVATE_KEY` instead would have made us the custodian of every operator's key, which is the
+ * one promise this project repeats on every surface.
+ *
+ * Loading a module by path executes that operator's code — the same trust as `node --require`. It is
+ * their own config, not something a peer can influence.
+ *
+ *   module.exports = async ({ payload, envelope }) => '0x…';   // see examples/signer-viem.js
+ *
+ * A configured-but-broken signer must never downgrade to sending unsigned: lib/node.js REFUSES. Here we
+ * fail loudly at boot for the same reason — a typo'd path that silently left the node unsigned would
+ * look exactly like success until a peer refused everything.
+ */
+function loadSigner() {
+  const spec = process.env.LAWBOR_SIGNER;
+  if (!spec) return undefined;                      // unsigned by design, and /health says so
+  let mod;
+  try { mod = require(path.resolve(process.cwd(), spec)); }
+  catch (e) { throw new Error('LAWBOR_SIGNER=' + spec + ' could not be loaded: ' + e.message + ' — refusing to start unsigned while claiming a signer'); }
+  const fn = typeof mod === 'function' ? mod : (mod && typeof mod.sign === 'function' ? mod.sign : null);
+  if (!fn) throw new Error('LAWBOR_SIGNER=' + spec + ' must export a function (or { sign }) taking { payload, envelope } and returning a 0x signature');
+  return fn;
+}
+
 /** Build the server. deps.preflight / deps.fetch / deps.verify injectable for tests (no network). */
 function build(deps = {}) {
   // Retention (opt-in, unbounded by default): LAWBOR_MAX_MESSAGES caps live rows, LAWBOR_MAX_AGE_DAYS
@@ -215,7 +250,7 @@ function build(deps = {}) {
     allowUnauthenticated, admitProbation,
     // ORIGINATION: the operator injects their own signer (wallet/KMS/hardware). Deliberately no env-var
     // private-key adapter — that would hand the key to the node and break its central promise.
-    sign: deps.sign,
+    sign: deps.sign || loadSigner(),
     // the relay READS the mesh's book and delegates fan-out to it — it no longer keeps its own
     peers: () => mesh.addrs(),
     selectTargets: (to, opts) => mesh.selectTargets(to, opts) });
@@ -431,7 +466,7 @@ function build(deps = {}) {
     try {
       // verifiesSettlements is reported next to authenticatesSenders on purpose: both are "is this node
       // actually checking, or just accepting?" A node with no chain reader rates nothing, and says so.
-      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, originatesSigned: node.originatesSigned, verifier: verifierStatus(), verifiesSettlements: !!chain, consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only' });
+      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, originatesSigned: node.originatesSigned, verifier: verifierStatus(node.relay.authenticates), verifiesSettlements: !!chain, consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only' });
       /* The node's public face. The ERC-8004 card declares a `web` service at `/`, and `/` used to
        * 404 — a registration promising an endpoint that does not answer is the exact placeholder
        * pathology that card is written to avoid. Serving it is therefore not decoration. */

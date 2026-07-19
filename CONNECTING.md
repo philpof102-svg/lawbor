@@ -12,8 +12,9 @@ two nodes up on a LAN (two PCs on the same Wi-Fi / router) and watch a message c
 
 ```bash
 git clone https://github.com/philpof102-svg/lawbor && cd lawbor
-node --version            # 18+  (LAWBOR has zero npm dependencies — nothing to install)
-npm test                 # optional: 156 checks should pass
+npm install              # the core needs nothing; this pulls viem, the OPTIONAL signature verifier
+node --version            # 18+
+npm test                 # optional, but this is what 'it works' means here
 ```
 
 Find each machine's LAN IP:
@@ -33,6 +34,36 @@ PORT=4899 node sim/oracle.js          # prints: LAWBOR test oracle (PERMISSIVE) 
 
 Both nodes will point at `http://192.168.1.20:4899`. (Skip this step and drop `MAINSTREET_URL` if you
 use addresses that already have a real MainStreet score ≥ 40.)
+
+## 1b. Give each node a signer — otherwise nothing will arrive
+
+**This step is new, and without it the rest of this guide silently fails.** A node with `viem` installed
+authenticates every inbound envelope, so two nodes that cannot sign will refuse each other. You will see
+`delivered:false` and an empty `/requests`, with this reason on the receiving side:
+
+```
+envelope carries no signature — `from` would be an unverified claim
+```
+
+LAWBOR never holds a key, so it cannot sign for you. Point it at **a module you wrote**:
+
+```bash
+cp examples/signer-viem.js ./my-signer.js     # then edit the "the key" block
+export LAWBOR_SIGNER=./my-signer.js
+```
+
+The node calls that module with the EIP-712 payload and expects a `0x` signature back. What happens in
+between is yours — a wallet, a KMS, a hardware device. There is deliberately **no `LAWBOR_PRIVATE_KEY`**:
+an env var we read would make us the custodian of your key, which is the one thing this project promises
+never to be. A signer path that does not load **refuses to start** rather than booting unsigned.
+
+The address your signer speaks as MUST equal that node's `LAWBOR_ADDR`. A valid signature by a different
+key is still refused — that is the impersonation gate working, and it looks exactly like a config typo.
+Check `GET /health`: you want `originatesSigned: true` **and** `authenticatesSenders: true`.
+
+> **Testing the mechanics only?** Set `LAWBOR_ALLOW_UNAUTHENTICATED=1` on **both** nodes instead. Then
+> `from` is an unverified claim anyone can type, and any address's reputation can be worn by anyone.
+> Fine for a LAN demo of the plumbing, never for anything reachable.
 
 ## 2. Start a node on each machine
 
@@ -102,5 +133,11 @@ LAWBOR_NODE_URL=http://127.0.0.1:4830 LAWBOR_VIEW=requests npm run desktop
 - **`discovery card unreachable`** → a firewall is blocking port 4830. Allow it, or check the IP.
 - **Message dropped / not in requests** → the sender's address scored below 40. Use the stub oracle
   (step 1), or an address with a real MainStreet score.
+- **`delivered:false` and `/requests` stays empty** → neither node has a signer. See step 1b: the
+  receiver refuses unsigned envelopes with "envelope carries no signature". `delivered` now means A PEER
+  ACCEPTED IT, not "we tried" — `delivered:null` means the transport could not tell us either way.
+- **Node exits at boot with `LAWBOR_SIGNER=… could not be loaded`** → the path is wrong. Deliberate: a
+  node that booted unsigned while you believed it was signing would look identical to success.
+- **Every envelope refused as impersonation** → your signer's address ≠ that node's `LAWBOR_ADDR`.
 - **`169.254.*` refused even with `LAWBOR_ALLOW_PRIVATE`** → intentional. Link-local / cloud metadata
   is never opened; it is the SSRF target that matters.
