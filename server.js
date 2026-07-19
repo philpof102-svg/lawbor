@@ -619,9 +619,9 @@ function build(deps = {}) {
       if (req.method === 'GET' && url === '/lawbor/peers') return json(res, 200, { peers: sharePeers(3) });
 
       if (req.method === 'POST' && url === '/say') {
-        if (!(await operatorOk(req))) return denyOperator(res);  const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.say(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason }); }
+        if (!(await operatorOk(req))) return denyOperator(res);  const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.say(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, forwarded: r.forwarded, delivered: r.delivered, targets: r.targets || [], sign: r.sign, reason: r.reason }); }
       if (req.method === 'POST' && url === '/bot/say') {
-        if (!(await operatorOk(req))) return denyOperator(res);  const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.botSay(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, delivered: r.delivered }); }
+        if (!(await operatorOk(req))) return denyOperator(res);  const a = await body(req) || {}; if (!a.to || !a.body) return json(res, 400, { error: 'to + body required' }); const r = await node.botSay(a.to, a.body, { thread: a.thread }); return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, forwarded: r.forwarded, delivered: r.delivered, targets: r.targets || [] }); }
 
       /* WORK — the three verbs. State is DERIVED from the message log by folding it, so there is no
        * job table to drift out of sync with what was actually said. The actor rules are checked HERE,
@@ -710,7 +710,10 @@ function build(deps = {}) {
         return json(res, 200, {
           wanted,
           note: 'the WANTED board: open, claimable jobs (reward posters). Anyone — human or bot — may bid; the reward settles directly in USDC on Base between the two parties, LAWBOR holds nothing. A bot may also POST here: its autopilot advertises missing prerequisites of its own blocked jobs (postWanted).',
-          verifiesSettlements: !!chain,
+          // PROBED, like /health. This was `!!chain` in three routes after the /health fix landed — the
+          // same construction-time boolean the /health comment says was caught lying, still shipping
+          // next to the numbers a payer reads. Fixing one call site is not fixing a claim.
+          verifiesSettlements: (await settlementStatus()).verifying,
         });
       }
 
@@ -740,7 +743,10 @@ function build(deps = {}) {
           circle: [...c.circle.entries()].sort((a, b) => b[1] - a[1]).map(([addr, m]) => ({ addr, usdcMicro: String(m) })),
           inbound: [...c.inbound.entries()].sort((a, b) => b[1] - a[1]).map(([addr, m]) => ({ addr, usdcMicro: String(m) })),
           evidence: c.evidence, netted: c.netted,
-          verifiesSettlements: !!chain,
+          // PROBED, like /health. This was `!!chain` in three routes after the /health fix landed — the
+          // same construction-time boolean the /health comment says was caught lying, still shipping
+          // next to the numbers a payer reads. Fixing one call site is not fixing a claim.
+          verifiesSettlements: (await settlementStatus()).verifying,
           limits: c.limits.concat(RATING_LIMITS),
         });
       }
@@ -754,7 +760,10 @@ function build(deps = {}) {
         const state = q.get('state');
         return json(res, 200, {
           jobs: state ? jobs.filter((j) => j.state === state) : jobs,
-          verifiesSettlements: !!chain,
+          // PROBED, like /health. This was `!!chain` in three routes after the /health fix landed — the
+          // same construction-time boolean the /health comment says was caught lying, still shipping
+          // next to the numbers a payer reads. Fixing one call site is not fixing a claim.
+          verifiesSettlements: (await settlementStatus()).verifying,
           note: 'negotiation + settlement PROOF. A job is settled only when a Base USDC tx matching the signed award verifies on-chain; settled means PAID, never delivered.'
             + (chain ? '' : ' No chain reader configured here (LAWBOR_RPC_URL=off), so no settlement can verify on this node.'),
         });

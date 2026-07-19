@@ -48,9 +48,26 @@ envelope carries no signature — `from` would be an unverified claim
 LAWBOR never holds a key, so it cannot sign for you. Point it at **a module you wrote**:
 
 ```bash
-cp examples/signer-viem.js ./my-signer.js     # then edit the "the key" block
+cp examples/signer-viem.js ./my-signer.js
+export MY_TEST_KEY=0x<your own 32-byte throwaway key>   # EACH NODE NEEDS ITS OWN
 export LAWBOR_SIGNER=./my-signer.js
 ```
+
+⚠️ **Every node needs a DIFFERENT key.** The example falls back to a hardcoded `0x1111…` key, so two
+operators who both copy it end up speaking as the SAME address — and every envelope is then refused as
+impersonation, which reads exactly like a mysterious network failure. Set `MY_TEST_KEY` on each node, and
+set that node's `LAWBOR_ADDR` to the matching address (the example exposes it as `module.exports.address`).
+
+**Running two nodes on ONE machine?** Give each its own message store, or they silently share
+`data/messages.jsonl` and each folds the other's traffic as its own:
+
+```bash
+LAWBOR_DB=/tmp/lawbor-a.jsonl LAWBOR_CONTROL=/tmp/lawbor-a.control   # node A
+LAWBOR_DB=/tmp/lawbor-b.jsonl LAWBOR_CONTROL=/tmp/lawbor-b.control   # node B
+LAWBOR_ALLOW_LOOPBACK=1                                              # 127.0.0.1 peering needs this
+```
+
+`LAWBOR_DATA_DIR` does **not** do this — it only steers the txfacts cache.
 
 The node calls that module with the EIP-712 payload and expects a `0x` signature back. What happens in
 between is yours — a wallet, a KMS, a hardware device. There is deliberately **no `LAWBOR_PRIVATE_KEY`**:
@@ -88,12 +105,14 @@ PORT=4830 node server.js
 ## 3. Peer them (each learns the other's address → URL)
 
 ```bash
-# on PC-A, tell it where Bob is:
-curl -X POST http://192.168.1.20:4830/peers -H content-type:application/json \
+# on PC-A. NOTE THE 127.0.0.1: every operator-gated route (/peers /say /accept /work /block) trusts
+# ONLY loopback. Curling your OWN LAN IP is a REMOTE caller and answers 401 — this guide said
+# 192.168.x here for weeks and every reader hit that wall on the first write.
+curl -X POST http://127.0.0.1:4830/peers -H content-type:application/json \
   -d '{"addr":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","url":"http://192.168.1.21:4830"}'
 
-# on PC-B, tell it where Alice is:
-curl -X POST http://192.168.1.21:4830/peers -H content-type:application/json \
+# on PC-B, same rule — the URL you POST TO is loopback, the url you POST ABOUT is the LAN one
+curl -X POST http://127.0.0.1:4830/peers -H content-type:application/json \
   -d '{"addr":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","url":"http://192.168.1.20:4830"}'
 ```
 
@@ -103,16 +122,16 @@ A `{"ok":true}` means the peer was admitted. `curl http://<ip>:4830/health` show
 ## 4. Send a message and watch it arrive
 
 ```bash
-# Alice (PC-A) messages Bob:
-curl -X POST http://192.168.1.20:4830/say -H content-type:application/json \
+# Alice (PC-A) messages Bob — again loopback, it is an operator route
+curl -X POST http://127.0.0.1:4830/say -H content-type:application/json \
   -d '{"to":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","body":"gm bob, from another machine"}'
 
 # On Bob (PC-B): first contact from a stranger lands in REQUESTS, not the inbox
-curl http://192.168.1.21:4830/requests
+curl http://127.0.0.1:4830/requests
 # accept Alice, and it moves to Bob's inbox:
-curl -X POST http://192.168.1.21:4830/accept -H content-type:application/json \
+curl -X POST http://127.0.0.1:4830/accept -H content-type:application/json \
   -d '{"addr":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
-curl http://192.168.1.21:4830/inbox
+curl http://127.0.0.1:4830/inbox
 ```
 
 You are now watching the full stack across two machines: reputation admission, the consent quarantine,
