@@ -155,5 +155,38 @@ t('the proven-worker rule stays deterministic and never exceeds the tolerance', 
   assert.equal(a.worker, W2.toLowerCase(), 'standing does not buy an unbounded premium');
 });
 
+// ---- WANTED posts: a bot advertises its own mechanical needs (the wanted-reward principle) ---------
+console.log('\nLAWBOR autopilot — decideWanted (the bot posts what IT needs done):');
+const { decideWanted } = require('../lib/autopilot');
+
+t('a blocked job with a MISSING prerequisite makes the bot post that prerequisite as WANTED', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'deploy', task: 'deploy the site', dependsOn: ['build'] }))];
+  const w = decideWanted(jobs(m), REQ, { postWanted: true, wantedBudget: '20 USDC' });
+  assert.equal(w.length, 1);
+  assert.equal(w[0].jobId, 'build');
+  assert.match(w[0].task, /WANTED: build — prerequisite of "deploy the site"/);
+  assert.equal(w[0].budgetHint, '20 USDC');
+});
+
+t('a prerequisite that EXISTS (just not awarded yet) is NOT re-posted — only truly missing ones', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'deploy', task: 'd', dependsOn: ['build'] })),
+             row(REQ, W1, buildWork('help_wanted', { jobId: 'build', task: 'b' }))];
+  assert.equal(decideWanted(jobs(m), REQ, { postWanted: true }).length, 0, 'build exists — waiting, not missing');
+});
+
+t('only OUR OWN blocked jobs create our need; someone else\'s blocked job does not', () => {
+  const m = [row(W2, REQ, buildWork('help_wanted', { jobId: 'their-deploy', task: 't', dependsOn: ['their-build'] }))];
+  assert.equal(decideWanted(jobs(m), REQ, { postWanted: true }).length, 0);
+});
+
+t('OFF by default, bounded when on, deduped across parents', () => {
+  const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'a', task: 'a', dependsOn: ['x', 'y', 'z'] })),
+             row(REQ, W1, buildWork('help_wanted', { jobId: 'b', task: 'b', dependsOn: ['x'] }))];
+  assert.equal(decideWanted(jobs(m), REQ, {}).length, 0, 'a bot that can create work must be opted in');
+  const w = decideWanted(jobs(m), REQ, { postWanted: true, maxWantedPerTick: 2 });
+  assert.equal(w.length, 2, 'bounded per tick');
+  assert.equal(new Set(w.map((x) => x.jobId)).size, w.length, 'x is queued once, not once per parent');
+});
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exitCode = fail ? 1 : 0;

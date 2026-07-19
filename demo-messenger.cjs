@@ -84,7 +84,10 @@ function node(self, human, port) {
     const { creditFor } = require('./lib/credit');
     const policy = { maxOpenBids: 3, minBidsBeforeAward: 1, maxPrice: 100, maxActionsPerTick: 2,
       // a stranger is served, just dearer — never refused, or a cold-start node could never begin
-      unknownRequesterPremium: 1.4, provenWorkerTolerance: 0.15 };
+      unknownRequesterPremium: 1.4, provenWorkerTolerance: 0.15,
+      // the WANTED-poster principle: a bot may advertise the missing prerequisites of its own blocked
+      // jobs, with a budget hint — and the org assembles itself. Explicitly enabled here.
+      postWanted: true, wantedBudget: '20 USDC' };
     setInterval(async () => {
       for (const n of [a, b]) {
         try {

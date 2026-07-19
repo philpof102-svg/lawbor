@@ -419,6 +419,33 @@ function build(deps = {}) {
         return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason || null, ...(settled ? { settled } : {}) });
       }
 
+      /* THE WANTED BOARD — the open, claimable frontier, each poster annotated with OUR OWN verified
+       * history with them. This is the "communication by trust" surface: before answering a wanted
+       * poster, the one question a worker can settle without trusting anyone is "has this requester
+       * ever actually paid ME?" — so the board answers exactly that, and nothing more. No global score;
+       * a 0 is labelled an absence, never a bad mark. Anyone — human or bot — may bid on any row. */
+      if (req.method === 'GET' && url === '/wanted') {
+        const { blocked: wBlocked } = store.control();
+        const wMsgs = store.all().filter((m) => !wBlocked.has(String(m.from).toLowerCase()));
+        await resolveFacts(wMsgs);
+        const wJobs = [...work.foldThread(wMsgs, { txFacts }).values()];
+        const wc = creditFor(node.self, work.settlementsFrom(wMsgs, { txFacts }), { returnFlow: deps.returnFlow || null });
+        const wanted = wJobs.filter((j) => j.state === 'open' && j.ready).sort((a, b) => b.at - a.at).map((j) => ({
+          jobId: j.jobId, task: j.task, ref: j.ref, tags: j.tags, budgetHint: j.budgetHint,
+          requester: j.requester, bids: j.bids.length, thread: j.thread,
+          trust: {
+            paidUsMicro: String(wc.inbound.get(j.requester) || 0),
+            wePaidThemMicro: String(wc.direct.get(j.requester) || 0),
+            note: 'verified on Base, OUR history only — 0 means no history with us, not a bad mark',
+          },
+        }));
+        return json(res, 200, {
+          wanted,
+          note: 'the WANTED board: open, claimable jobs (reward posters). Anyone — human or bot — may bid; the reward settles directly in USDC on Base between the two parties, LAWBOR holds nothing. A bot may also POST here: its autopilot advertises missing prerequisites of its own blocked jobs (postWanted).',
+          verifiesSettlements: !!chain,
+        });
+      }
+
       /* THE RATING — per-viewer, conservation-bounded, never a global score (RATING-DESIGN.md).
        * Five rating designs were farmed by a dedicated adversary; what survived is that standing is a
        * CONSERVED, DEBITED quantity bounded by this node's OWN irrecoverable spend. So this is the view

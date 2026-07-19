@@ -124,6 +124,18 @@ function fakeRpc(over = {}) {
     assert.equal(c.direct[0].usdcMicro, '500000000', 'standing did not move — still only the real 500');
   });
 
+  await t('the WANTED board lists open claimable jobs, trust-annotated from OUR verified history', async () => {
+    await post('/work', { to: WORKER, kind: 'help_wanted', jobId: 'open-1', task: 'review the fold', ref: 'https://github.com/x/y/pull/9', budgetHint: '30 USDC', as: 'human' });
+    const w = await get('/wanted');
+    const row = w.wanted.find((x) => x.jobId === 'open-1');
+    assert.ok(row, 'an open, ready job is a wanted poster');
+    assert.equal(row.ref, 'https://github.com/x/y/pull/9');
+    assert.equal(row.budgetHint, '30 USDC');
+    assert.equal(typeof row.trust.paidUsMicro, 'string', 'each poster carries OUR history with the requester');
+    assert.match(row.trust.note, /not a bad mark/, 'a 0 is labelled an absence, never a bad mark');
+    assert.ok(!w.wanted.find((x) => x.jobId === 'idx'), 'a settled job is no longer wanted');
+  });
+
   await t('the txFacts cache holds only FINAL facts, and is a cache of chain data (not our state)', async () => {
     const lines = fs.readFileSync(facts, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
     assert.ok(lines.length >= 1);
