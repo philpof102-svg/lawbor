@@ -39,7 +39,7 @@ const { createChainReader } = require('./lib/chain');
 const { creditFor } = require('./lib/credit');
 // OPTIONAL signature verifier (viem, lazily loaded). Absent ⇒ the relay stays fail-closed on inbound
 // peers, which /health reports. See lib/verify.js for why the crypto is not hand-rolled here.
-const { createVerifier, verifierStatus } = require('./lib/verify');
+const { createVerifier, createAuthVerifier, verifierStatus, keyProofMessage } = require('./lib/verify');
 // The MCP surface. server.js advertised /mcp and /.well-known/mcp.json for weeks while BOTH returned
 // 500 'mcpDispatch is not defined' — this module was never required. The suite missed it because
 // test/mcp.test.js imports ../mcp directly and never went through the HTTP server. A machine-readable
@@ -194,7 +194,16 @@ function build(deps = {}) {
   const node = createNode({ self, human: deps.human || process.env.LAWBOR_HUMAN || null,
     preflight: deps.preflight || mainstreetPreflight, minScore: deps.minScore || MIN_SCORE, send, store,
     // deps.verifySig wins (tests inject their own); otherwise use viem if the operator installed it.
-    verifySig: deps.verifySig || createVerifier() || undefined, allowUnauthenticated, admitProbation,
+    /* ONE flag, ONE meaning. The relay ignores allowUnauthenticated whenever a verifier exists (it
+     * then demands a signature from everyone) — so the moment viem became installable, that flag
+     * silently turned into a no-op and four integration tests that had "passed" for weeks began
+     * failing. They were right to: they had been exercising a mesh whose authentication was off, and
+     * nothing said so. The bug was never the relay's strictness, it was that the SAME flag meant
+     * "accept unsigned" or "" depending on whether an unrelated package happened to be installed.
+     * So: asking for unauthenticated mode now means no verifier is wired at all. Fail-closed survives
+     * because the flag defaults to FALSE — a real deploy gets the verifier and demands signatures. */
+    verifySig: deps.verifySig || (allowUnauthenticated ? undefined : createVerifier()) || undefined,
+    allowUnauthenticated, admitProbation,
     // ORIGINATION: the operator injects their own signer (wallet/KMS/hardware). Deliberately no env-var
     // private-key adapter — that would hand the key to the node and break its central promise.
     sign: deps.sign,
@@ -310,6 +319,22 @@ function build(deps = {}) {
       }
     } catch { /* no cache yet is normal */ }
   }
+  /* The message-signature verifier, used BOTH by the premium caller gate and by key proofs. Until now
+   * only tests ever injected one, so on every real deploy `deps.verifyAuth` was undefined and the gate
+   * fell back to the spoofable `x-lawbor-caller` header — a gate that reported itself as on while
+   * checking nothing. createAuthVerifier() builds one from viem when installed, null otherwise (and
+   * /health + /apps keep reporting which, so the fallback stays visible rather than assumed). */
+  const verifyAuth = deps.verifyAuth || createAuthVerifier() || null;
+
+  /* Verified signature proofs, keyed by signature. Deliberately NOT persisted to disk like txFacts: a
+   * signature re-verifies in microseconds with no network call, so a cache would be pure risk (a stale
+   * or poisoned row would forge a key proof) for no gain. Recomputed per boot, in memory. */
+  const sigFacts = new Map();
+  /* ONE object for every fold, rather than nine sites each assembling their own `foldOpts`. That
+   * pattern is how a new kind of fact ends up wired into eight readers and forgotten in the ninth —
+   * which reads as "the proof works everywhere except this one screen", the least debuggable bug shape
+   * there is. Both maps are mutated in place, so every reader sees the same facts. */
+  const foldOpts = { txFacts, sigFacts };
   const rememberFact = (txHash, f) => {
     txFacts.set(txHash, f);
     if (!factsFile || !f || Number(f.confirmations) < MIN_CONF_CACHE) return;   // only cache the final
@@ -327,6 +352,17 @@ function build(deps = {}) {
       // invisible to the unit tests, which inject txFacts directly, and caught only by running it live
       // against Base. Any verb that names a transaction must be resolved here, or it silently never works.
       if (w && (w.kind === 'settle' || w.kind === 'validate') && w.txHash && !txFacts.has(w.txHash)) wanted.push(w.txHash);
+      // Signature proofs resolve here too. Cheap and local (no RPC), but it must happen in the SAME
+      // place: the last time a verb that cites evidence was resolved anywhere else, every `validate`
+      // stayed silently unverified for weeks because only `settle` was being resolved.
+      if (w && w.kind === 'validate' && w.keySig && w.keyAddr && !sigFacts.has(w.keySig) && verifyAuth) {
+        try {
+          const v = await verifyAuth({ message: keyProofMessage(w.keyAddr), sig: w.keySig, claimed: w.keyAddr });
+          // Store ONLY on success. A cached failure would freeze a verifier outage into a permanent
+          // "this key is not held", which is a lie about someone else's wallet.
+          if (v && v.ok === true) sigFacts.set(w.keySig, { signer: String(v.signer).toLowerCase() });
+        } catch { /* unverified ⇒ confers nothing, retried next read */ }
+      }
     }
     for (const h of [...new Set(wanted)].slice(0, budget)) {
       try { const f = await chain.checkTx(h); if (f) rememberFact(h, f); } catch {}
@@ -342,7 +378,7 @@ function build(deps = {}) {
    * dev/testing — /health + /apps report `authenticatesCaller` so nobody assumes a gate that isn't on. */
   async function authCaller(req) {
     const signed = req.headers['x-lawbor-auth'];
-    if (signed && typeof deps.verifyAuth === 'function') {
+    if (signed && typeof verifyAuth === "function") {
       const i = String(signed).indexOf(':');
       const addr = i > 0 ? String(signed).slice(0, i) : '';
       const sig = i > 0 ? String(signed).slice(i + 1) : '';
@@ -350,7 +386,7 @@ function build(deps = {}) {
       const minute = Math.floor(Date.now() / 60000);
       for (const m of [minute, minute - 1]) {                 // accept current + previous minute (clock skew)
         const message = 'LAWBOR-AUTH:' + addr.toLowerCase() + ':' + m;
-        try { const v = await deps.verifyAuth({ message, sig, claimed: addr }); if (v && v.ok === true && String(v.signer || '').toLowerCase() === addr.toLowerCase()) return addr.toLowerCase(); } catch {}
+        try { const v = await verifyAuth({ message, sig, claimed: addr }); if (v && v.ok === true && String(v.signer || '').toLowerCase() === addr.toLowerCase()) return addr.toLowerCase(); } catch {}
       }
       return null;                                            // signed but did not verify → unauthenticated
     }
@@ -369,7 +405,12 @@ function build(deps = {}) {
   const isLoopback = (req) => { const ra = (req.socket && req.socket.remoteAddress) || ''; return ra === '127.0.0.1' || ra === '::1' || ra === '::ffff:127.0.0.1'; };
   async function operatorOk(req) {
     if (isLoopback(req)) return true;
-    if (typeof deps.verifyAuth !== 'function') return false;  // remote + no verifier ⇒ fail closed
+    // Reads the SAME resolved verifier as authCaller. It used to read deps.verifyAuth directly while
+    // authCaller read the resolved one — two gates disagreeing about whether a verifier is wired is the
+    // drift that makes a security question unanswerable. WIDENING, stated plainly: now that a verifier
+    // is actually built in production, remote operator control becomes possible for the first time —
+    // and only for a caller who signs as `self`, which is the documented intent above.
+    if (typeof verifyAuth !== 'function') return false;       // remote + no verifier ⇒ fail closed
     const caller = await authCaller(req);
     return !!caller && caller.toLowerCase() === String(node.self).toLowerCase();
   }
@@ -524,7 +565,7 @@ function build(deps = {}) {
         let proven;
         if (a.kind === 'award' && requireProofAbove != null) {
           await resolveFacts(wMsgs);
-          proven = work.provenFrom(wMsgs, { txFacts });
+          proven = work.provenFrom(wMsgs, foldOpts);
         }
         const may = work.mayApply(job, a.kind, node.self, { requireProofAbove, proven, worker: a.worker, price: a.price });
         if (!may.ok) return json(res, 409, { error: may.reason });
@@ -542,10 +583,10 @@ function build(deps = {}) {
           // read 'validated' as 'this payee holds their key' when the tx went the other way.
           await resolveFacts([{ body: wbody }], 1);
           const allMsgs = store.all();
-          const jv = work.foldThread(allMsgs, { txFacts }).get(a.jobId);
+          const jv = work.foldThread(allMsgs, foldOpts).get(a.jobId);
           // key control is GLOBAL, so report it from provenFrom — saying 'not verified' because the tx
           // was not on this job's rail would hide the very proof the caller just supplied.
-          const provenNow = work.provenFrom(allMsgs, { txFacts });
+          const provenNow = work.provenFrom(allMsgs, foldOpts);
           const signer = ((jv && jv.validations || []).find((x) => x.txHash === (JSON.parse(wbody).txHash)) || {}).from || null;
           validated = { pathValidated: !!(jv && jv.pathValidated), payeeProved: !!(jv && jv.payeeProved),
             signer, signerProvenKey: !!(signer && provenNow.has(signer)),
@@ -557,7 +598,7 @@ function build(deps = {}) {
         }
         if (a.kind === 'settle') {
           await resolveFacts([{ body: wbody }], 1);
-          const j = work.foldThread(store.all(), { txFacts }).get(a.jobId);
+          const j = work.foldThread(store.all(), foldOpts).get(a.jobId);
           settled = {
             verified: !!(j && j.settlement),
             note: !chain ? 'no chain reader configured (LAWBOR_RPC_URL=off) — this settlement can never verify here, and confers no credit'
@@ -577,8 +618,8 @@ function build(deps = {}) {
         const { blocked: wBlocked } = store.control();
         const wMsgs = store.all().filter((m) => !wBlocked.has(String(m.from).toLowerCase()));
         await resolveFacts(wMsgs);
-        const wJobs = [...work.foldThread(wMsgs, { txFacts }).values()];
-        const wc = creditFor(node.self, work.settlementsFrom(wMsgs, { txFacts }), { returnFlow: deps.returnFlow || null });
+        const wJobs = [...work.foldThread(wMsgs, foldOpts).values()];
+        const wc = creditFor(node.self, work.settlementsFrom(wMsgs, foldOpts), { returnFlow: deps.returnFlow || null });
         const wanted = wJobs.filter((j) => j.state === 'open' && j.ready).sort((a, b) => b.at - a.at).map((j) => ({
           jobId: j.jobId, task: j.task, ref: j.ref, tags: j.tags, budgetHint: j.budgetHint,
           requester: j.requester, bids: j.bids.length, thread: j.thread,
@@ -607,7 +648,7 @@ function build(deps = {}) {
         const { blocked: cBlocked } = store.control();
         const msgs = store.all().filter((m) => !cBlocked.has(String(m.from).toLowerCase()));
         await resolveFacts(msgs);
-        const edges = work.settlementsFrom(msgs, { txFacts });
+        const edges = work.settlementsFrom(msgs, foldOpts);
         const c = creditFor(node.self, edges, { returnFlow: deps.returnFlow || null });
         const of = q.get('of');
         const num = (m, k) => String(m.get(String(k).toLowerCase()) || 0);
@@ -635,7 +676,7 @@ function build(deps = {}) {
         const { blocked: jobBlocked } = store.control();
         const jobMsgs = store.all().filter((m) => !jobBlocked.has(String(m.from).toLowerCase()));
         await resolveFacts(jobMsgs);
-        const jobs = [...work.foldThread(jobMsgs, { txFacts }).values()].sort((a, b) => b.at - a.at);
+        const jobs = [...work.foldThread(jobMsgs, foldOpts).values()].sort((a, b) => b.at - a.at);
         const state = q.get('state');
         return json(res, 200, {
           jobs: state ? jobs.filter((j) => j.state === state) : jobs,
@@ -709,7 +750,7 @@ function build(deps = {}) {
       }
 
       // ---- installed apps (extensibility) + the premium tier ------------------------------------
-      if (req.method === 'GET' && url === '/apps') return json(res, 200, { apps: apps.apps(), premium: paywall ? { priceUsdc: paywall.price, payTo: paywall.payTo, network: paywall.network, verifies: paywall.verifies, authenticatesCaller: typeof deps.verifyAuth === 'function' } : null });
+      if (req.method === 'GET' && url === '/apps') return json(res, 200, { apps: apps.apps(), premium: paywall ? { priceUsdc: paywall.price, payTo: paywall.payTo, network: paywall.network, verifies: paywall.verifies, authenticatesCaller: typeof verifyAuth === "function" } : null });
       if (req.method === 'POST' && url === '/x402/settle') { if (!paywall) return json(res, 503, { error: 'no premium tier configured (set LAWBOR_PAY_TO)' }); const a = await body(req) || {}; const r = await paywall.settle(a.payment || a); return json(res, r.ok ? 200 : 402, r); }
       // app routes: /app/<name>/... — tried after the built-ins, before 404. Premium apps 402 here.
       if (url.startsWith('/app/')) {

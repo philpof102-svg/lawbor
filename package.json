@@ -36,7 +36,7 @@
     "erc8004-register.cjs"
   ],
   "scripts": {
-    "test": "node test/lawbor.test.js && node test/node.test.js && node test/server.test.js && node test/mcp.test.js && node test/manifest.test.js && node test/mesh.test.js && node test/beat.test.js && node test/work.test.js && node test/autopilot.test.js && node test/credit.test.js && node test/chain.test.js && node test/probation.test.js && node test/verify.test.js && node test/originate.test.js && node test/consent.test.js && node test/apps.test.js && node test/desktop.test.js",
+    "test": "node test/lawbor.test.js && node test/node.test.js && node test/server.test.js && node test/mcp.test.js && node test/manifest.test.js && node test/mesh.test.js && node test/beat.test.js && node test/work.test.js && node test/autopilot.test.js && node test/credit.test.js && node test/chain.test.js && node test/probation.test.js && node test/verify.test.js && node test/keyproof.test.js && node test/originate.test.js && node test/consent.test.js && node test/apps.test.js && node test/desktop.test.js",
     "prepublishOnly": "npm test",
     "start": "node server.js",
     "mcp": "node bin/lawbor-mcp.js",
@@ -69,5 +69,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "optionalDependencies": {
+    "viem": "^2.21.0"
   }
 }
