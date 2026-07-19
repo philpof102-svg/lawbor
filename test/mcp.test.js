@@ -41,6 +41,26 @@ const payload = (r) => JSON.parse(r.result.content[0].text);
     assert.ok(p.limits.some((l) => /settled means PAID, never delivered/.test(l)));
   });
 
+  await t('THE PUBLISHED SKILL CANNOT GO STALE: every write tool must be taught in SKILL.md', async () => {
+    /* SKILL.md is served publicly at /skill.md and is the primary way an outside agent learns to use
+     * this node. It had drifted to teaching 8 tools while the surface exposed 19, and still claimed
+     * "LAWBOR models no settlement" long after settlements were being verified on-chain — a published
+     * artefact describing a node that no longer existed. This test makes drift fail instead of rot. */
+    const skill = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
+    const READ_ONLY_OK = new Set(['lawbor_inbox', 'lawbor_thread', 'lawbor_requests', 'lawbor_unblock', 'lawbor_accept', 'lawbor_bot_say', 'lawbor_say']);
+    const missing = TOOLS.map((x) => x.name).filter((n) => !READ_ONLY_OK.has(n) && !skill.includes(n));
+    assert.deepEqual(missing, [], 'these tools exist but SKILL.md never mentions them: ' + missing.join(', '));
+  });
+
+  await t('SKILL.md states the CURRENT honesty rules, not the ones it was born with', async () => {
+    const skill = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
+    assert.match(skill, /`settled` means PAID/i, 'settled must be defined as paid');
+    assert.match(skill, /[Nn]either means delivered/, 'and explicitly NOT as delivered');
+    assert.match(skill, /no global score/i, 'the absence of a global score is the headline property');
+    assert.ok(!/LAWBOR models negotiation and coordination, not execution\/settlement/.test(skill),
+      'the old "no settlement" claim is now false and must not survive in the published skill');
+  });
+
   await t('every WORK tool description states plainly that settlement is not included', async () => {
     // An agent reads these descriptions and nothing else. If they imply payment, the tool lies to
     // the only audience it has — which is precisely the anti-hype rule this project holds itself to.
