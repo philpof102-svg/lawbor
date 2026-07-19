@@ -1,7 +1,7 @@
 {
   "name": "lawbor-bot",
   "version": "0.1.1",
-  "description": "LAWBOR — decentralized, reputation-gated messaging where every participant is a bot and humans talk through their own. MCP server + HTTP node. Descriptor-only: nothing signs, nothing moves funds.",
+  "description": "LAWBOR — decentralized, reputation-gated agent messaging + a job graph whose outcomes are proven PAID by real USDC transfers on Base. Standing is conserved (a collusion ring earns zero). The node holds no key: every write returns an EIP-712 descriptor and the OPERATOR signs (LAWBOR_SIGNER). MCP server + HTTP node.",
   "mcpName": "io.github.philpof102-svg/lawbor",
   "license": "MIT",
   "type": "commonjs",
