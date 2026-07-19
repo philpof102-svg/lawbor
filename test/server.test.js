@@ -236,6 +236,18 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     assert.equal(await call('127.0.0.1', '/delete', { id: 'nope' }), 200, 'loopback /delete is allowed (id just not found)');
   });
 
+  /* THE DEPENDENCY MUST STAY VISIBLE. Admission calls one HTTP oracle for every inbound envelope, and
+   * the shipped default is a service WE run — so a node that does not disclose it is asking its operator
+   * to trust a third party they were never told about. /health carried no mention of the oracle at all
+   * until this was added; the discovery card gave the bare name "MainStreet" with no URL and no owner.
+   * This test exists so the field cannot quietly disappear again. */
+  await t('/health DISCLOSES the admission oracle — the one external dependency that can stop this node', async () => {
+    const h = (await get(urlA, '/health')).body;
+    assert.ok(h.admissionOracle, 'the oracle must appear in the node\'s own status');
+    assert.equal(typeof h.admissionOracle.operatedByUs, 'boolean', 'and say plainly whose it is');
+    assert.ok(String(h.admissionOracle.note || '').length > 20, 'with the consequence spelled out, not just a flag');
+  });
+
   await t('GET /skill.md serves the installable agent-org skill (markdown)', async () => {
     const r = await fetch(urlA + '/skill.md');
     assert.equal(r.status, 200);

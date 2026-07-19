@@ -48,7 +48,21 @@ const { dispatch: mcpDispatch, TOOLS: mcpTools } = require('./mcp');
 const CORS = { 'access-control-allow-origin': '*' };
 
 const SELF = process.env.LAWBOR_ADDR || '0x0000000000000000000000000000000000000000';
-const MAINSTREET_URL = (process.env.MAINSTREET_URL || 'https://avisradar-production.up.railway.app').replace(/\/$/, '');
+/* THE ORACLE, and the fact that it is OURS.
+ * ================================================================================================
+ * Every inbound envelope is gated on an answer from this URL. LAWBOR's state is decentralized — folded
+ * from a local log, viewer-relative, no global score — but ADMISSION runs through one HTTP service, and
+ * the shipped default is a service WE operate. A default nobody changes is an authority in practice,
+ * whatever the architecture diagram says.
+ *
+ * We are not removing the default (a node that refuses everyone until configured is a worse first
+ * experience, and preflight has always been injectable). We are making the dependency IMPOSSIBLE TO
+ * MISS: /health names the oracle and says plainly when it is ours rather than the operator's, and the
+ * boot banner repeats it. Nobody can choose otherwise while the dependency is invisible — and it WAS
+ * invisible: /health did not mention the oracle at all, and the discovery card gave a name with no URL. */
+const DEFAULT_ORACLE = 'https://avisradar-production.up.railway.app';
+const MAINSTREET_URL = (process.env.MAINSTREET_URL || DEFAULT_ORACLE).replace(/\/$/, '');
+const ORACLE_IS_OURS = MAINSTREET_URL === DEFAULT_ORACLE;
 const MIN_SCORE = Number(process.env.LAWBOR_MIN_SCORE || 40);
 
 /* The rating's limits, returned WITH every /credit response rather than buried in a doc. They are the
@@ -495,7 +509,16 @@ function build(deps = {}) {
     try {
       // verifiesSettlements is reported next to authenticatesSenders on purpose: both are "is this node
       // actually checking, or just accepting?" A node with no chain reader rates nothing, and says so.
-      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, originatesSigned: node.originatesSigned, verifier: verifierStatus(node.relay.authenticates), verifiesSettlements: await settlementStatus(), consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only' });
+      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, originatesSigned: node.originatesSigned, verifier: verifierStatus(node.relay.authenticates), verifiesSettlements: await settlementStatus(), consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only',
+        /* THE ONE EXTERNAL DEPENDENCY THAT CAN STOP THIS NODE, and it was not in its own status.
+         * Admission calls this URL for every inbound envelope. Disclosed with WHOSE it is, because
+         * "MainStreet" as a bare name (the discovery card's version) tells an operator nothing about
+         * who they are trusting. minScore travels with it — a floor is meaningless without its scorer. */
+        admissionOracle: deps.preflight ? { url: null, operatedByUs: false, note: 'a preflight function was injected by this operator — no HTTP oracle is consulted' }
+          : { url: MAINSTREET_URL, minScore: deps.minScore || MIN_SCORE, operatedByUs: ORACLE_IS_OURS,
+              note: ORACLE_IS_OURS
+                ? 'THIS IS THE SHIPPED DEFAULT AND WE RUN IT. Every inbound envelope is gated on an answer from a service this node\'s operator does not control. Set MAINSTREET_URL to your own, or inject your own preflight. With LAWBOR_ADMIT=probation an outage admits at score 0 instead of refusing everyone.'
+                : 'operator-chosen oracle' } });
       /* The node's public face. The ERC-8004 card declares a `web` service at `/`, and `/` used to
        * 404 — a registration promising an endpoint that does not answer is the exact placeholder
        * pathology that card is written to avoid. Serving it is therefore not decoration. */
@@ -911,7 +934,10 @@ if (require.main === module) {
     if (!node.relay.authenticates) missing.push('a signature verifier — an inbound sender is an unverified claim (npm install viem, or unset LAWBOR_ALLOW_UNAUTHENTICATED)');
     console.log('LAWBOR bot on :' + PORT + ' — self ' + SELF + ' — reputation-gated, descriptor-only.'
       + (missing.length ? '\n  ⚠️  still needed to go live: ' + missing.join(' · ')
-        : '\n  ✓ signs its own envelopes' + (node.relay.authenticates ? ' and authenticates inbound peers' : '')));
+        : '\n  ✓ signs its own envelopes' + (node.relay.authenticates ? ' and authenticates inbound peers' : ''))
+      // said at every boot, because a dependency nobody sees is a dependency nobody can choose away from
+      + (ORACLE_IS_OURS ? '\n  ⓘ  admission asks ' + MAINSTREET_URL + ' — the shipped default, which WE run.'
+          + ' Every inbound envelope depends on it. Set MAINSTREET_URL to your own oracle to decide for yourself.' : ''));
     // Liveness + pruning only happen because something drives them; mesh.js schedules nothing.
     if (process.env.LAWBOR_BEAT !== '0') startHeartbeat();
     if (process.env.LAWBOR_ALLOW_UNAUTHENTICATED === '1') {
