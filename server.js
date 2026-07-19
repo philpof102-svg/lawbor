@@ -270,7 +270,13 @@ function build(deps = {}) {
     selectTargets: (to, opts) => mesh.selectTargets(to, opts) });
 
   const json = (res, code, obj, extra) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*', ...(extra || {}) }); res.end(JSON.stringify(obj)); };
-  const body = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 2e6) req.destroy(); }); req.on('end', () => { try { r(b ? JSON.parse(b) : {}); } catch { r(null); } }); });
+  /* setEncoding('utf8') matters: without it each chunk is a Buffer stringified INDEPENDENTLY, so a
+   * multi-byte character split across two TCP chunks decodes as U+FFFD on both sides of the cut.
+   * With it, node's StringDecoder holds the partial sequence across chunks. Verified the happy path
+   * survives ("gm — café, emoji 🚀") — the split case is rare but it is a French-speaking operator's
+   * messages that would silently corrupt, and an external tester was already chasing mojibake here
+   * (theirs turned out to be client-side CP1252, but the server hole was real). */
+  const body = (req) => new Promise((r) => { if (typeof req.setEncoding === 'function') req.setEncoding('utf8'); let b = ''; req.on('data', (c) => { b += c; if (b.length > 2e6) req.destroy(); }); req.on('end', () => { try { r(b ? JSON.parse(b) : {}); } catch { r(null); } }); });
 
   /**
    * The heartbeat — the loop that makes liveness and pruning actually happen.
@@ -684,10 +690,20 @@ function build(deps = {}) {
           // key control is GLOBAL, so report it from provenFrom — saying 'not verified' because the tx
           // was not on this job's rail would hide the very proof the caller just supplied.
           const provenNow = work.provenFrom(allMsgs, foldOpts);
-          const signer = ((jv && jv.validations || []).find((x) => x.txHash === (JSON.parse(wbody).txHash)) || {}).from || null;
+          /* WHICH proof was supplied decides which sentences can be true. The old note tested `!chain`
+           * FIRST, so a node with LAWBOR_RPC_URL=off answered "this handshake can never verify here"
+           * next to signerProvenKey:true — a free off-chain signature needs no chain, verifying it here
+           * is its entire point, and an external tester read that contradiction straight off the wire.
+           * The signer lookup also matched sig-rows only because undefined === undefined; now explicit. */
+          const wparsed = JSON.parse(wbody);
+          const row = (jv && jv.validations || []).find((x) => wparsed.keySig ? x.keySig === wparsed.keySig : x.txHash === wparsed.txHash) || {};
+          const signer = row.from || null;
           validated = { pathValidated: !!(jv && jv.pathValidated), payeeProved: !!(jv && jv.payeeProved),
             signer, signerProvenKey: !!(signer && provenNow.has(signer)),
-            note: !chain ? 'no chain reader — this handshake can never verify here'
+            note: wparsed.keySig
+              ? (row.verified ? 'verified OFF-CHAIN: an EIP-191 signature over LAWBOR-KEY:' + (wparsed.keyAddr || '') + ' — no chain needed, that is the point of this path. It proves the key is held, never that a transfer would land (pathValidated stays false), and it confers no standing.'
+                : 'signature did NOT verify — wrong key, malformed, or no verifier wired on this node')
+              : !chain ? 'no chain reader on this node — a TX handshake cannot verify here (LAWBOR_RPC_URL is off). The free keyAddr+keySig signature path still can.'
               : (jv && jv.payeeProved) ? 'the PAYEE signed it: they control that address'
               : (jv && jv.pathValidated) ? 'a real transfer crossed between you, but it was NOT signed by the payee — it does not prove they hold that key'
               : signer ? 'verified on Base: ' + signer + ' signed it, so THAT address is proven to hold its key. It is not this job rail (the two parties did not both take part), so pathValidated stays false.'
@@ -899,7 +915,15 @@ function build(deps = {}) {
       }
 
       return json(res, 404, { error: 'GET /health,/inbox,/requests,/bot-activity,/thread,/jobs,/graph,/apps,/skill.md,/app/<name>/... · POST /say,/bot/say,/block,/unblock,/accept,/delete,/work,/x402/settle,/lawbor/*,/peers' });
-    } catch (e) { return json(res, 500, { error: e.message }); }
+    } catch (e) {
+      /* A deliberate refusal is not a server fault. buildWork/buildEnvelope THROW on malformed input
+       * ("body exceeds 8192 chars", "needs a jobId", …) and this catch-all dressed every one of them as
+       * a 500 — so a client sending an over-long body was told the SERVER crashed, which is both wrong
+       * and the kind of signal that makes an autopilot retry a request that can never succeed. Our own
+       * validation messages are 400s; anything else genuinely is our fault and stays 500. */
+      const ours = /exceeds|required|needs |must |unknown |malformed|refused|invalid/i.test(e.message || '');
+      return json(res, ours ? 400 : 500, { error: e.message });
+    }
   });
   /* resolveFacts + foldOpts are exposed ON PURPOSE. Every fact this node treats as evidence is produced
    * by resolveFacts, and nothing could reach it from a test — the unit suite injects txFacts/sigFacts by

@@ -62,14 +62,23 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     assert.equal((await get(urlA, '/health')).body.peers, 1);
   });
 
+  /* POLL, don't sleep. These waits were `setTimeout(120)` — a wall-clock race that an external tester
+   * fingered as the likeliest cause of the intermittent red on their machine: 120ms of loopback + fetch
+   * is comfortable here and can be exceeded there under AV/GC/EDR. Polling until the condition holds (or
+   * a generous budget expires) is deterministic AND faster in the common case — it returns the instant
+   * the transport lands instead of always paying the fixed delay. */
+  const until = async (fn, budgetMs = 3000, stepMs = 15) => {
+    const deadline = Date.now() + budgetMs;
+    for (;;) { if (await fn()) return true; if (Date.now() > deadline) return false; await new Promise((s) => setTimeout(s, stepMs)); }
+  };
+
   await t('HUMAN→AGENT→AGENT→HUMAN first contact lands in bob\'s REQUESTS (consent), then accept → inbox', async () => {
     const r = await post(urlA, '/say', { to: B, body: 'gm bob — phil here' });
     assert.equal(r.status, 200); assert.equal(r.body.delivered, true);
     assert.equal(r.body.sign.signed, false, 'still descriptor-only: the operator signs');
-    await new Promise((s) => setTimeout(s, 120));                 // let the transport land
     // phil is a stranger to bob → quarantined in Requests, NOT the inbox (the consent gate)
-    const reqs = await get(urlB, '/requests');
-    assert.ok(reqs.body.threads.some((th) => th.last.includes('phil here')), "bob's REQUESTS has it");
+    const landed = await until(async () => (await get(urlB, '/requests')).body.threads.some((th) => th.last.includes('phil here')));
+    assert.ok(landed, "bob's REQUESTS has it");
     assert.ok(!(await get(urlB, '/inbox')).body.threads.some((th) => th.last.includes('phil here')), 'NOT yet in the inbox');
     assert.ok(!(await get(urlB, '/bot-activity')).body.threads.some((th) => th.last.includes('phil here')), 'not the bot feed — a human wrote it');
     // bob accepts phil → promoted to the inbox
@@ -80,9 +89,8 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
   await t("AGENT→AGENT autonomous: bob's bot answers; it shows in phil's WATCH feed, not his inbox", async () => {
     const r = await post(urlB, '/bot/say', { to: A, body: 'bot: availability synced, 2 slots open' });
     assert.equal(r.status, 200); assert.equal(r.body.delivered, true);
-    await new Promise((s) => setTimeout(s, 120));
-    const watch = await get(urlA, '/bot-activity');
-    assert.ok(watch.body.threads.some((th) => th.last.includes('availability synced')), "phil WATCHES his bot's peer chat");
+    const seen = await until(async () => (await get(urlA, '/bot-activity')).body.threads.some((th) => th.last.includes('availability synced')));
+    assert.ok(seen, "phil WATCHES his bot's peer chat");
     const inbox = await get(urlA, '/inbox');
     assert.ok(!inbox.body.threads.some((th) => th.last.includes('availability synced')), 'bot chatter stays out of the human inbox');
   });
@@ -109,6 +117,14 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
   await t('input guards: /say without to+body → 400; unknown route → 404', async () => {
     assert.equal((await post(urlA, '/say', { body: 'x' })).status, 400);
     assert.equal((await get(urlA, '/nope')).status, 404);
+  });
+
+  await t('a DELIBERATE refusal is a 400, not a 500 — a body too long is the client\'s fault, not a crash', async () => {
+    // buildEnvelope throws "body exceeds 8192 chars"; that used to surface as HTTP 500, telling the
+    // caller the SERVER broke — which makes an autopilot retry a request that can never succeed.
+    const r = await post(urlA, '/say', { to: B, body: 'x'.repeat(9000) });
+    assert.equal(r.status, 400, 'over-long body is a 400');
+    assert.match(r.body.error, /exceeds/);
   });
 
   /* ---- the peer layer is WIRED, and must stay wired ------------------------------------------
