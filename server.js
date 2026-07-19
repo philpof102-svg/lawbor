@@ -346,6 +346,27 @@ function build(deps = {}) {
     : (process.env.LAWBOR_RPC_URL || 'https://mainnet.base.org');
   const chain = deps.chain !== undefined ? deps.chain
     : createChainReader({ rpcUrl, fetch: doFetch });
+  /* CAN THIS NODE ACTUALLY VERIFY A SETTLEMENT? /health used to answer `!!chain` — true whenever an RPC
+   * URL and a fetch existed, which is a fact about CONSTRUCTION, not about Base. A node whose endpoint
+   * rate-limits, is geo-blocked, or points at the wrong chain reported verifiesSettlements:true while
+   * verifying nothing, and every settlement silently stayed unverified and conferred nothing. This is
+   * the third field in this codebase caught claiming more than it knew (after `delivered` and the
+   * verifier status) and it is the most expensive of the three, because the whole rating rests on it.
+   *
+   * Now it PROBES: eth_chainId, success cached forever, failure retried after a minute, the call itself
+   * bounded by a timeout. Never throws — a status route that 500s tells you even less than a wrong one. */
+  async function settlementStatus() {
+    if (!chain) return { verifying: false, reason: 'no RPC configured (LAWBOR_RPC_URL=off) — settlements can be RECORDED but never verified, so they confer nothing' };
+    try {
+      const s = await chain.status();
+      return s.reachable
+        ? { verifying: true, chainId: s.chainId, rpc: s.rpcUrl }
+        : { verifying: false, chainId: s.chainId, rpc: s.rpcUrl, reason: 'RPC configured but NOT USABLE: ' + s.lastError + ' — settlements stay unverified and confer nothing until this clears' };
+    } catch (e) {
+      return { verifying: false, reason: 'chain probe failed: ' + ((e && e.message) || e) };
+    }
+  }
+
   /* Opt-in: refuse to AWARD above this amount to a worker who has never proven they hold their key.
    * Unset = off (unchanged behaviour). It stops LAWBOR committing to an unproven address; it cannot
    * stop a human paying one anyway, outside the protocol. */
@@ -466,7 +487,7 @@ function build(deps = {}) {
     try {
       // verifiesSettlements is reported next to authenticatesSenders on purpose: both are "is this node
       // actually checking, or just accepting?" A node with no chain reader rates nothing, and says so.
-      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, originatesSigned: node.originatesSigned, verifier: verifierStatus(node.relay.authenticates), verifiesSettlements: !!chain, consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only' });
+      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, originatesSigned: node.originatesSigned, verifier: verifierStatus(node.relay.authenticates), verifiesSettlements: await settlementStatus(), consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only' });
       /* The node's public face. The ERC-8004 card declares a `web` service at `/`, and `/` used to
        * 404 — a registration promising an endpoint that does not answer is the exact placeholder
        * pathology that card is written to avoid. Serving it is therefore not decoration. */
@@ -551,7 +572,8 @@ function build(deps = {}) {
           evidenceEndpoint: base + '/credit',
           wantedBoard: base + '/wanted',
           skill: base + '/skill.md',
-          verifiesSettlementsOnBase: !!chain,
+          // PROBED, not assumed: this card is read by other agents deciding whether to trust our evidence.
+          verifiesSettlementsOnBase: (await settlementStatus()).verifying,
           admits: admitProbation ? 'probation' : 'proceed-only',
           writesToErc8004ReputationRegistry: false,
           whyNot: 'its only write rule is that the submitter is not the agent owner, which a second address defeats for the price of gas. Measured in the wild at 59-91% coordinated-Sybil reviewers (Xiong et al. 2026). We publish re-verifiable evidence instead of a score.',

@@ -91,7 +91,12 @@ function fakeRpc(over = {}) {
   const get = (p) => fetch(`http://localhost:${port}${p}`).then((r) => r.json());
 
   await t('/health reports verifiesSettlements — a node that cannot check must not look like it can', async () => {
-    assert.equal((await get('/health')).verifiesSettlements, true);
+    const v = (await get('/health')).verifiesSettlements;
+    // It used to be `!!chain` — TRUE as soon as a url and a fetch existed, which says nothing about
+    // Base. Now it is a PROBE, and the shape carries the reason when it cannot verify, because
+    // "cannot check" must never be indistinguishable from "checked and fine".
+    assert.equal(v.verifying, true, 'this rig injects a working reader');
+    assert.equal(v.chainId, 8453);
   });
 
   await t('a job settles only when the chain agrees, and /credit then shows what WE paid', async () => {
