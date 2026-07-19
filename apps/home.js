@@ -34,6 +34,9 @@ p{margin:0 0 12px} a{color:var(--ok)} a:hover{text-decoration:none}
 .pill.warn{color:var(--warn);border-color:#3b3320}
 .job .t{font-size:15px;margin-bottom:6px}
 .job .meta{font-size:12px;color:var(--dim)}
+/* the free-quantity disclaimer: dimmer than the number it qualifies, but never hidden — a caveat
+   nobody can read is the same as no caveat, and this one separates a count from a trust signal */
+.job .hint{color:#5c6570;font-size:11px}
 .limits{font-size:12.5px;color:var(--dim);border-left:2px solid var(--line);padding-left:12px;margin-top:8px}
 .limits div{margin-bottom:5px}
 code{background:#0e1217;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:13px}
@@ -106,8 +109,9 @@ function pill(ok,text){return '<span class="pill '+(ok?'ok':'warn')+'">'+esc(tex
         var j=w.wanted[i], paid=Number(j.trust&&j.trust.paidUsMicro||0);
         html+='<div class="card job"><div class="t">'+esc(j.task||j.jobId)+'</div>'+
           (j.ref?'<div class="meta">code: <a href="'+esc(j.ref)+'" target="_blank" rel="noopener noreferrer">'+esc(String(j.ref).replace(/^https?:\\/\\//,''))+'</a></div>':'')+
-          '<div class="meta">'+esc(j.jobId)+(j.budgetHint?' · budget '+esc(j.budgetHint):'')+' · '+j.bids+' bid'+(j.bids===1?'':'s')+'</div>'+
-          '<div class="meta">requester '+esc(String(j.requester).slice(0,10))+'… · '+
+          '<div class="meta">'+esc(j.jobId)+(j.budgetHint?' · budget '+esc(j.budgetHint):'')+
+            ' · '+j.bids+' bid'+(j.bids===1?'':'s')+' <span class="hint">(competition, not a trust signal — a bid costs nothing to send)</span></div>'+
+          '<div class="meta">requester <a href="/who?of='+encodeURIComponent(String(j.requester))+'">'+esc(String(j.requester).slice(0,10))+'…</a> · '+
             (paid>0 ? 'has paid us '+usdc(paid)+', verified on Base' : 'no payment history with us — an absence, not a bad mark')+'</div>'+
           '</div>';
       }

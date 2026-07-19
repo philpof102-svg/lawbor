@@ -704,7 +704,11 @@ function build(deps = {}) {
             // live rail and a held key — never that anyone is good for the money.
             pathValidated: !!j.pathValidated,
             payeeProved: !!j.payeeProved,
-            note: 'verified on Base, OUR history only — 0 means no history with us, not a bad mark. pathValidated/payeeProved are a zero-value handshake, NOT standing.',
+            // "a zero-value handshake" was the wording until this morning, and it went stale the moment
+            // the recommendation moved from 0 to dust (a zero-value ERC-20 transfer is the signature of
+            // address-poisoning). A proof may now also be a free off-chain signature. What has not
+            // changed, and is the only part that matters, is that NONE of it is standing.
+            note: 'verified on Base, OUR history only — 0 means no history with us, not a bad mark. pathValidated/payeeProved come from a proof of key (a dust transfer, or a free signature), NOT standing.',
           },
         }));
         return json(res, 200, {
