@@ -21,13 +21,24 @@ const payload = (r) => JSON.parse(r.result.content[0].text);
 (async () => {
   console.log('LAWBOR MCP — the gitlawb/openclaude tool surface:');
 
-  await t('initialize + tools/list expose the 15 lawbor tools on protocol ' + PROTOCOL, async () => {
+  await t('initialize + tools/list expose the 17 lawbor tools on protocol ' + PROTOCOL, async () => {
     const init = await dispatch({ jsonrpc: '2.0', id: 1, method: 'initialize' }, { node });
     assert.equal(init.result.protocolVersion, PROTOCOL); assert.equal(init.result.serverInfo.name, 'lawbor');
     const list = await dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, { node });
-    assert.equal(list.result.tools.length, 15);
+    assert.equal(list.result.tools.length, 17);
     assert.equal(list.result.tools.map((x) => x.name).sort().join(),
-      'lawbor_accept,lawbor_award,lawbor_bid,lawbor_block,lawbor_bot_say,lawbor_graph,lawbor_inbox,lawbor_jobs,lawbor_post_job,lawbor_requests,lawbor_say,lawbor_thread,lawbor_unblock,lawbor_watch,lawbor_whoami');
+      'lawbor_accept,lawbor_award,lawbor_bid,lawbor_block,lawbor_bot_say,lawbor_credit,lawbor_graph,lawbor_inbox,lawbor_jobs,lawbor_post_job,lawbor_requests,lawbor_say,lawbor_settle,lawbor_thread,lawbor_unblock,lawbor_watch,lawbor_whoami');
+  });
+
+  await t('lawbor_credit refuses to let 0 read as "bad counterparty" when nothing can verify', async () => {
+    // Used standalone (no chain reader injected) NO settlement can ever verify. Returning bare zeros
+    // would libel an honest worker; the tool must say why the number is zero.
+    const r = await dispatch({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'lawbor_credit', arguments: {} } }, { node });
+    const p = JSON.parse(r.result.content[0].text);
+    assert.equal(p.viewer, node.self);
+    assert.ok(p.limits.some((l) => /no chain reader is wired/.test(l)), 'must disclose that nothing can verify');
+    assert.ok(p.limits.some((l) => /cold start is total/.test(l)));
+    assert.ok(p.limits.some((l) => /settled means PAID, never delivered/.test(l)));
   });
 
   await t('every WORK tool description states plainly that settlement is not included', async () => {

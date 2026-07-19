@@ -1,0 +1,139 @@
+'use strict';
+// LAWBOR chain reader + the settle→credit path, driven END TO END over real HTTP against a fake Base RPC.
+// A string-pinned check would pass while the wiring was broken, so this drives the actual routes: post a
+// job, award it, settle it with a tx the fake chain really serves, and read /credit.
+// Run: node test/chain.test.js
+const assert = require('node:assert');
+const { createChainReader, TRANSFER_TOPIC, USDC_BASE } = require('../lib/chain');
+const { build } = require('../server');
+const { createStore } = require('../lib/store');
+const path = require('node:path'), fs = require('node:fs');
+
+let pass = 0, fail = 0;
+const t = async (n, fn) => { try { await fn(); pass++; console.log('  ✓ ' + n); } catch (e) { fail++; console.log('  ✗ ' + n + '\n      ' + (e && e.message)); } };
+
+const REQ = '0x' + '11'.repeat(20), WORKER = '0x' + '22'.repeat(20);
+const TX = '0x' + 'ab'.repeat(32);
+const topicOf = (a) => '0x' + '0'.repeat(24) + a.slice(2).toLowerCase();
+const hx = (n) => '0x' + n.toString(16);
+
+/** A fake Base RPC. `over` lets each test bend one fact and watch the reader refuse. */
+function fakeRpc(over = {}) {
+  const o = { chainId: 8453, status: 1, blockNumber: 100, head: 120, valueMicro: 500000000n,
+    token: USDC_BASE, from: REQ, to: WORKER, extraTransfer: false, ...over };
+  return async (url, init) => {
+    const { method, params } = JSON.parse(init.body);
+    const result = (r) => ({ ok: true, json: async () => ({ jsonrpc: '2.0', result: r }) });
+    if (method === 'eth_chainId') return result(hx(o.chainId));
+    if (method === 'eth_blockNumber') return result(hx(o.head));
+    if (method === 'eth_getBlockByNumber') return result({ timestamp: hx(1700000000) });
+    if (method === 'eth_getTransactionReceipt') {
+      if (params[0] !== TX) return result(null);
+      const log = { address: o.token, topics: [TRANSFER_TOPIC, topicOf(o.from), topicOf(o.to)], data: '0x' + o.valueMicro.toString(16) };
+      const logs = [log];
+      if (o.extraTransfer) logs.push({ ...log, data: '0x' + (1n).toString(16) });   // a 2nd USDC transfer
+      return result({ status: hx(o.status), blockNumber: hx(o.blockNumber), logs });
+    }
+    return result(null);
+  };
+}
+
+(async () => {
+  console.log('LAWBOR chain reader — it refuses rather than guesses:');
+
+  await t('reads a real USDC transfer into an immutable fact', async () => {
+    const f = await createChainReader({ rpcUrl: 'http://rpc', fetch: fakeRpc() }).checkTx(TX);
+    assert.equal(f.from, REQ.toLowerCase()); assert.equal(f.to, WORKER.toLowerCase());
+    assert.equal(f.valueMicro, '500000000'); assert.equal(f.chainId, 8453);
+    assert.equal(f.confirmations, 21, 'head 120 - block 100 + 1');
+  });
+
+  await t('WRONG CHAIN: an RPC that is not Base verifies NOTHING (the mis-pointed-url kill)', async () => {
+    // pointing at Ethereum would otherwise "verify" a different token on a different chain
+    assert.equal(await createChainReader({ rpcUrl: 'http://rpc', fetch: fakeRpc({ chainId: 1 }) }).checkTx(TX), null);
+  });
+
+  await t('a REVERTED tx settles nothing', async () => {
+    assert.equal(await createChainReader({ rpcUrl: 'http://rpc', fetch: fakeRpc({ status: 0 }) }).checkTx(TX), null);
+  });
+
+  await t('AMBIGUOUS: two USDC transfers in one tx → refuse, never pick one', async () => {
+    assert.equal(await createChainReader({ rpcUrl: 'http://rpc', fetch: fakeRpc({ extraTransfer: true }) }).checkTx(TX), null);
+  });
+
+  await t('a non-USDC token transfer is not a settlement', async () => {
+    assert.equal(await createChainReader({ rpcUrl: 'http://rpc', fetch: fakeRpc({ token: '0x' + '99'.repeat(20) }) }).checkTx(TX), null);
+  });
+
+  await t('unknown tx / malformed hash / no reader at all → null (fail closed)', async () => {
+    const r = createChainReader({ rpcUrl: 'http://rpc', fetch: fakeRpc() });
+    assert.equal(await r.checkTx('0x' + 'cd'.repeat(32)), null);
+    assert.equal(await r.checkTx('0xnope'), null);
+    assert.equal(createChainReader({}), null, 'unconfigured reader is null, not a permissive stub');
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  console.log('\nLAWBOR settle → credit, driven over real HTTP:');
+
+  const base = path.join(__dirname, '..', 'data', 'test-chain-' + process.pid);
+  const facts = base + '.txfacts';
+  for (const f of [base + '.jsonl', base + '.control', base + '.subs', facts]) { try { fs.unlinkSync(f); } catch {} }
+  const store = createStore(base + '.jsonl', base + '.control');
+  const built = build({
+    self: REQ, store, txFactsFile: facts,
+    preflight: async () => ({ decision: 'PROCEED', score: 90 }),
+    chain: createChainReader({ rpcUrl: 'http://rpc', fetch: fakeRpc() }),
+    allowLoopback: true, allowInsecure: true, allowUnauthenticated: true,
+  });
+  await new Promise((r) => built.server.listen(0, r));
+  const port = built.server.address().port;
+  const post = (p, b) => fetch(`http://localhost:${port}${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+  const get = (p) => fetch(`http://localhost:${port}${p}`).then((r) => r.json());
+
+  await t('/health reports verifiesSettlements — a node that cannot check must not look like it can', async () => {
+    assert.equal((await get('/health')).verifiesSettlements, true);
+  });
+
+  await t('a job settles only when the chain agrees, and /credit then shows what WE paid', async () => {
+    await post('/work', { to: WORKER, kind: 'help_wanted', jobId: 'idx', task: 'index a contract', as: 'human' });
+    await post('/work', { to: WORKER, kind: 'award', jobId: 'idx', worker: WORKER, price: '500 USDC' });
+    let before = await get('/credit');
+    assert.equal(before.direct.length, 0, 'an award alone confers NOTHING — awarded is not paid');
+
+    const s = await post('/work', { to: WORKER, kind: 'settle', jobId: 'idx', txHash: TX, amountMicro: '500000000' });
+    assert.equal(s.settled.verified, true, 'the fake chain serves this tx, so it verifies: ' + JSON.stringify(s.settled));
+
+    const jobs = await get('/jobs');
+    assert.equal(jobs.jobs.find((j) => j.jobId === 'idx').state, 'settled');
+
+    const c = await get('/credit');
+    assert.equal(c.direct.length, 1);
+    assert.equal(c.direct[0].addr, WORKER.toLowerCase());
+    assert.equal(c.direct[0].usdcMicro, '500000000', 'the viewer paid 500 USDC, so that is the standing');
+    assert.ok(c.limits.some((l) => /no global score/.test(l)), 'the limits ship WITH the number');
+    assert.equal(c.evidence[0].txHash, TX, 'and the evidence is re-verifiable by the reader');
+  });
+
+  await t('a settle whose AMOUNT does not match the chain confers nothing', async () => {
+    await post('/work', { to: WORKER, kind: 'help_wanted', jobId: 'liar', task: 'x', as: 'human' });
+    await post('/work', { to: WORKER, kind: 'award', jobId: 'liar', worker: WORKER, price: '9000 USDC' });
+    // claim 9000 USDC for a tx that really moved 500 — and the tx is already claimed by 'idx' anyway
+    const s = await post('/work', { to: WORKER, kind: 'settle', jobId: 'liar', txHash: TX, amountMicro: '9000000000' });
+    assert.equal(s.settled.verified, false);
+    const c = await get('/credit');
+    assert.equal(c.direct[0].usdcMicro, '500000000', 'standing did not move — still only the real 500');
+  });
+
+  await t('the txFacts cache holds only FINAL facts, and is a cache of chain data (not our state)', async () => {
+    const lines = fs.readFileSync(facts, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+    assert.ok(lines.length >= 1);
+    assert.ok(lines.every((f) => f.confirmations >= 12), 'a young tx must not be frozen at its birth confs');
+    assert.ok(lines.every((f) => f.txHash && f.from && f.to && f.valueMicro), 'each row is a chain fact');
+  });
+
+  await new Promise((r) => built.server.close(r));
+  for (const f of [base + '.jsonl', base + '.control', base + '.subs', facts]) { try { fs.unlinkSync(f); } catch {} }
+
+  console.log('\n' + pass + ' passed, ' + fail + ' failed');
+  process.exitCode = fail ? 1 : 0;
+})();

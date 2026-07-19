@@ -25,6 +25,8 @@
  *   Reputation gate + fail-closed live in the relay. MainStreet preflight is the injectable oracle.
  */
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const dns = require('dns').promises;
 const { createNode } = require('./lib/node');
 const { createStore } = require('./lib/store');
@@ -33,6 +35,8 @@ const { createApps } = require('./lib/apps');
 const { createPaywall } = require('./lib/paywall');
 const beat = require('./lib/beat');
 const work = require('./lib/work');
+const { createChainReader } = require('./lib/chain');
+const { creditFor } = require('./lib/credit');
 // The MCP surface. server.js advertised /mcp and /.well-known/mcp.json for weeks while BOTH returned
 // 500 'mcpDispatch is not defined' — this module was never required. The suite missed it because
 // test/mcp.test.js imports ../mcp directly and never went through the HTTP server. A machine-readable
@@ -43,6 +47,16 @@ const CORS = { 'access-control-allow-origin': '*' };
 const SELF = process.env.LAWBOR_ADDR || '0x0000000000000000000000000000000000000000';
 const MAINSTREET_URL = (process.env.MAINSTREET_URL || 'https://avisradar-production.up.railway.app').replace(/\/$/, '');
 const MIN_SCORE = Number(process.env.LAWBOR_MIN_SCORE || 40);
+
+/* The rating's limits, returned WITH every /credit response rather than buried in a doc. They are the
+ * price of the property that made it survive adversarial farming, and a caller who does not see them
+ * will misread the numbers (RATING-DESIGN.md §5). */
+const RATING_LIMITS = [
+  'this is the view from THIS node only — there is no global score, and two nodes will disagree by design',
+  'cold start is total: a node that has paid nobody sees 0 for everyone, including honest workers',
+  'settled means PAID, never delivered and never that the work was any good — no escrow, no dispute path',
+  'standing earned from you is history, not a forecast: it does not predict future delivery',
+];
 
 /** LAWBOR_ANCHORS="0xabc…=https://a.example,0xdef…=https://b.example" → the operator's seed peers.
  *  No default seed ships: a hardcoded bootstrap node would quietly centralize the mesh. */
@@ -241,6 +255,52 @@ function build(deps = {}) {
   }) : null;
   const apps = createApps(deps.apps || [], { paywall });
 
+  /* SETTLEMENT VERIFICATION + the txFacts cache (see RATING-DESIGN.md).
+   * A `settle` message only claims a txHash; it becomes a rating edge only when an immutable chain
+   * fact confirms it. The reader is injectable (deps.chain) and otherwise built from LAWBOR_RPC_URL —
+   * with NEITHER, we verify nothing and every settle stays unverified. That is fail-closed on the credit
+   * side and it is reported at /health, so a node can never look like it is rating on-chain evidence
+   * while silently rating nothing.
+   * The cache is legitimate under the "no drifting side table" rule because it stores IMMUTABLE facts
+   * about a chain we do not own: deleting it only reduces what we can verify, re-fetching reproduces it,
+   * and it can never change a job's history (which stays derived from the log + the chain). We only ever
+   * cache a fact that is ALREADY final (>= MIN_CONF), since confirmations grow and a young one would
+   * otherwise be frozen at its birth value forever. */
+  const chain = deps.chain !== undefined ? deps.chain
+    : createChainReader({ rpcUrl: process.env.LAWBOR_RPC_URL, fetch: doFetch });
+  const MIN_CONF_CACHE = 12;
+  const txFacts = new Map();
+  const factsFile = deps.txFactsFile !== undefined ? deps.txFactsFile
+    : path.join(process.env.LAWBOR_DATA_DIR || path.join(__dirname, 'data'), 'txfacts.jsonl');
+  if (factsFile) {
+    try {
+      for (const line of fs.readFileSync(factsFile, 'utf8').split('\n')) {
+        if (!line.trim()) continue;
+        try { const f = JSON.parse(line); if (f && f.txHash) txFacts.set(String(f.txHash).toLowerCase(), f); } catch {}
+      }
+    } catch { /* no cache yet is normal */ }
+  }
+  const rememberFact = (txHash, f) => {
+    txFacts.set(txHash, f);
+    if (!factsFile || !f || Number(f.confirmations) < MIN_CONF_CACHE) return;   // only cache the final
+    try { fs.mkdirSync(path.dirname(factsFile), { recursive: true }); fs.appendFileSync(factsFile, JSON.stringify({ txHash, ...f }) + '\n'); } catch {}
+  };
+  /** Fetch the chain facts for any settle claims we have not resolved yet. Bounded per call so a large
+   *  log can never turn one HTTP request into hundreds of RPC calls. Best-effort: a miss just stays
+   *  unverified (and therefore confers nothing) until the next read. */
+  async function resolveFacts(messages, budget = 20) {
+    if (!chain) return txFacts;
+    const wanted = [];
+    for (const m of messages) {
+      const w = work.parseWork(m && m.body);
+      if (w && w.kind === 'settle' && w.txHash && !txFacts.has(w.txHash)) wanted.push(w.txHash);
+    }
+    for (const h of [...new Set(wanted)].slice(0, budget)) {
+      try { const f = await chain.checkTx(h); if (f) rememberFact(h, f); } catch {}
+    }
+    return txFacts;
+  }
+
   /* AUTHENTICATE the premium caller. v1 gated on an unauthenticated `x-lawbor-caller` header — anyone
    * could claim a subscribed address. Now: if a signature verifier is injected (deps.verifyAuth, same
    * shape as the relay's verifySig), a caller proves control of their address by signing a
@@ -286,7 +346,9 @@ function build(deps = {}) {
     const url = (req.url || '/').split('?')[0];
     const q = new URLSearchParams((req.url || '').split('?')[1] || '');
     try {
-      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, consentLocal: true });
+      // verifiesSettlements is reported next to authenticatesSenders on purpose: both are "is this node
+      // actually checking, or just accepting?" A node with no chain reader rates nothing, and says so.
+      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, verifiesSettlements: !!chain, consentLocal: true });
       if (req.method === 'GET' && url === '/.well-known/lawbor.json') return json(res, 200, { v: 1, addr: node.self, accept: '/lawbor/accept', minScore: MIN_SCORE, oracle: 'MainStreet', note: 'reputation-gated bot messaging' });
       // the installable agent skill: how to orchestrate a dynamic, trust-gated org on this node.
       if (req.method === 'GET' && url === '/skill.md') {
@@ -332,17 +394,65 @@ function build(deps = {}) {
         // a bot quoting autonomously is 'bot'. It is not cosmetic — it is the store view.
         const r = a.as === 'human' ? await node.say(a.to, wbody, { thread: a.thread })
                                    : await node.botSay(a.to, wbody, { thread: a.thread });
-        return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason || null });
+        // For a settle, resolve the chain fact right away and report HONESTLY whether it verified. A
+        // settle that cannot be checked is not an error (the tx may simply be young) but the caller must
+        // never be left believing a rating edge exists when none does.
+        let settled = undefined;
+        if (a.kind === 'settle') {
+          await resolveFacts([{ body: wbody }], 1);
+          const j = work.foldThread(store.all(), { txFacts }).get(a.jobId);
+          settled = {
+            verified: !!(j && j.settlement),
+            note: !chain ? 'no chain reader configured (LAWBOR_RPC_URL unset) — this settlement can never verify here, and confers no credit'
+              : (j && j.settlement) ? 'verified against Base — settled means PAID, not delivered'
+              : 'not verified (yet): unknown tx, too few confirmations, or a from/to/amount mismatch. Confers no credit until it verifies.',
+          };
+        }
+        return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason || null, ...(settled ? { settled } : {}) });
+      }
+
+      /* THE RATING — per-viewer, conservation-bounded, never a global score (RATING-DESIGN.md).
+       * Five rating designs were farmed by a dedicated adversary; what survived is that standing is a
+       * CONSERVED, DEBITED quantity bounded by this node's OWN irrecoverable spend. So this is the view
+       * from `node.self` and from nobody else, and two nodes will legitimately disagree. */
+      if (req.method === 'GET' && url === '/credit') {
+        const { blocked: cBlocked } = store.control();
+        const msgs = store.all().filter((m) => !cBlocked.has(String(m.from).toLowerCase()));
+        await resolveFacts(msgs);
+        const edges = work.settlementsFrom(msgs, { txFacts });
+        const c = creditFor(node.self, edges, { returnFlow: deps.returnFlow || null });
+        const of = q.get('of');
+        const num = (m, k) => String(m.get(String(k).toLowerCase()) || 0);
+        if (of) {
+          return json(res, 200, {
+            viewer: node.self, of: String(of).toLowerCase(),
+            directUsdcMicro: num(c.direct, of), circleUsdcMicro: num(c.circle, of),
+            evidence: c.evidence.filter((e) => e.worker === String(of).toLowerCase()),
+            netted: c.netted, limits: c.limits.concat(RATING_LIMITS),
+          });
+        }
+        return json(res, 200, {
+          viewer: node.self,
+          direct: [...c.direct.entries()].sort((a, b) => b[1] - a[1]).map(([addr, m]) => ({ addr, usdcMicro: String(m) })),
+          circle: [...c.circle.entries()].sort((a, b) => b[1] - a[1]).map(([addr, m]) => ({ addr, usdcMicro: String(m) })),
+          evidence: c.evidence, netted: c.netted,
+          verifiesSettlements: !!chain,
+          limits: c.limits.concat(RATING_LIMITS),
+        });
       }
       if (req.method === 'GET' && url === '/jobs') {
         // a blocked address is invisible in /jobs too — fold only non-blocked messages, so a blocked
         // sender's job posts AND bids disappear (they used to show here even though you blocked them).
         const { blocked: jobBlocked } = store.control();
-        const jobs = work.jobsFrom(store.all().filter((m) => !jobBlocked.has(String(m.from).toLowerCase())));
+        const jobMsgs = store.all().filter((m) => !jobBlocked.has(String(m.from).toLowerCase()));
+        await resolveFacts(jobMsgs);
+        const jobs = [...work.foldThread(jobMsgs, { txFacts }).values()].sort((a, b) => b.at - a.at);
         const state = q.get('state');
         return json(res, 200, {
           jobs: state ? jobs.filter((j) => j.state === state) : jobs,
-          note: 'negotiation only — settlementRef is opaque and never created, resolved or checked here',
+          verifiesSettlements: !!chain,
+          note: 'negotiation + settlement PROOF. A job is settled only when a Base USDC tx matching the signed award verifies on-chain; settled means PAID, never delivered.'
+            + (chain ? '' : ' No chain reader configured here (LAWBOR_RPC_URL unset), so no settlement can verify on this node.'),
         });
       }
 
@@ -351,7 +461,7 @@ function build(deps = {}) {
       if (req.method === 'GET' && url === '/graph') {
         const { blocked: gBlocked } = store.control();
         const g = work.graphOf(store.all().filter((m) => !gBlocked.has(String(m.from).toLowerCase())));
-        return json(res, 200, { ...g, note: 'dependency = upstream awarded (a worker chosen), NOT delivered — LAWBOR models no execution' });
+        return json(res, 200, { ...g, note: 'dependency = upstream awarded (a worker chosen) or settled (paid) — NEITHER means delivered; LAWBOR models no execution' });
       }
 
       if (req.method === 'GET' && url === '/inbox') return json(res, 200, { view: 'inbox', threads: store.inbox(node.self, Number(q.get('limit')) || 50) });
@@ -375,7 +485,7 @@ function build(deps = {}) {
       if (req.method === 'POST' && url === '/mcp') {
         const msg = await body(req);
         if (!msg) return json(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } });
-        const out = await mcpDispatch(msg, { node, apps });
+        const out = await mcpDispatch(msg, { node, apps, txFacts, resolveFacts, returnFlow: deps.returnFlow || null });
         return out ? json(res, 200, out) : res.writeHead(204, CORS) || res.end();   // notification → 204
       }
       if (req.method === 'GET' && url === '/.well-known/mcp.json') {

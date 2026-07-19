@@ -17,6 +17,7 @@
  *   The node is INJECTED (deps.node) so this file is transport/network-free and testable offline.
  */
 const work = require('./lib/work');
+const { creditFor } = require('./lib/credit');
 
 const PROTOCOL = '2024-11-05';
 const SERVER = { name: 'lawbor', version: '0.1.0' };
@@ -38,6 +39,8 @@ const TOOLS = [
   { name: 'lawbor_graph', description: 'READ-ONLY: the agent-org dependency graph — nodes, dependency edges, and the READY (claimable) frontier. A dependency is satisfied when its upstream job is AWARDED (a worker chosen), NOT delivered — LAWBOR models no execution. Read this to coordinate a swarm: only bid on jobs in `ready`.', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
   { name: 'lawbor_post_job', description: 'Post a job to a peer bot (help_wanted). You choose the jobId; use the same one in every copy you send. dependsOn (jobIds) makes it wait until those upstream jobs are awarded — the graph gate, so a job cannot be bid on before its prerequisites. Input: to, jobId, task, tags?, budgetHint?, dependsOn?, as? (human|bot, default bot).', inputSchema: { type: 'object', properties: { to: { type: 'string' }, jobId: { type: 'string' }, task: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, budgetHint: { type: 'string' }, dependsOn: { type: 'array', items: { type: 'string' } }, as: { type: 'string' } }, required: ['to', 'jobId', 'task'] } },
   { name: 'lawbor_bid', description: 'Answer a job with a price. One live bid per worker — bidding again REPLACES your previous bid. You cannot bid on your own job. Input: to (the requester), jobId, price, eta?, note?.', inputSchema: { type: 'object', properties: { to: { type: 'string' }, jobId: { type: 'string' }, price: { type: 'string' }, eta: { type: 'string' }, note: { type: 'string' } }, required: ['to', 'jobId', 'price'] } },
+  { name: 'lawbor_settle', description: 'Bind an awarded job to a REAL USDC transfer on Base, by txHash. Only the requester or the awarded worker may settle, and only after an award. The claim becomes a verified settlement ONLY if the on-chain tx matches the signed award exactly (Base chainId 8453, USDC, payer = the requester who signed the award, payee = the awarded worker, exact amount, >=12 confirmations); otherwise it confers nothing. LAWBOR moves no funds — the two parties transfer directly and this records a pointer anyone can re-verify and refute. `settled` means PAID, never delivered. Input: to, jobId, txHash (0x, 32 bytes), amountMicro (USDC 6-decimals, integer string).', inputSchema: { type: 'object', properties: { to: { type: 'string' }, jobId: { type: 'string' }, txHash: { type: 'string' }, amountMicro: { type: 'string' }, as: { type: 'string' } }, required: ['to', 'jobId', 'txHash', 'amountMicro'] } },
+  { name: 'lawbor_credit', description: 'READ-ONLY: the rating between bots, as seen FROM THIS NODE ONLY. There is no global score and no leaderboard — standing is a conserved, debited quantity bounded by this node\'s own irrecoverable spend, which is what makes it unfarmable by a collusion ring (five rating designs were farmed by an adversary before this one; see RATING-DESIGN.md). Returns directUsdc (net USDC this node itself paid, under an award it signed, verified on Base) and circleUsdc (attenuated credit conferred by the addresses this node paid, out of a FINITE budget), plus the re-verifiable evidence rows. Cold start is total: a node that has paid nobody sees 0 for everyone. Input: of? (0x address to look up).', inputSchema: { type: 'object', properties: { of: { type: 'string' } }, additionalProperties: false } },
   { name: 'lawbor_award', description: 'Award your job to one bidder. Only the requester may award, and the award restates the agreed price — that is the requester\'s signed commitment. Settlement is NOT included: settlementRef is an opaque string LAWBOR never creates or checks. Input: to (the winner), jobId, worker, price, eta?, settlementRef?.', inputSchema: { type: 'object', properties: { to: { type: 'string' }, jobId: { type: 'string' }, worker: { type: 'string' }, price: { type: 'string' }, eta: { type: 'string' }, settlementRef: { type: 'string' } }, required: ['to', 'jobId', 'worker', 'price'] } },
 ];
 
@@ -95,16 +98,41 @@ async function dispatch(msg, deps = {}) {
         } else if (name === 'lawbor_jobs') {
           // a blocked address is invisible in jobs too (posts and bids) — fold only non-blocked messages.
           const { blocked: jobBlocked } = node.store.control();
-          const jobs = work.jobsFrom(node.store.all().filter((m) => !jobBlocked.has(String(m.from).toLowerCase())));
+          const jobMsgs = node.store.all().filter((m) => !jobBlocked.has(String(m.from).toLowerCase()));
+          if (typeof deps.resolveFacts === 'function') await deps.resolveFacts(jobMsgs);
+          const jobs = [...work.foldThread(jobMsgs, { txFacts: deps.txFacts || null }).values()].sort((x, y) => y.at - x.at);
           payload = { jobs: a.state ? jobs.filter((j) => j.state === a.state) : jobs,
-            note: 'negotiation only — nothing here holds, releases or enforces payment' };
+            note: 'nothing here holds, releases or enforces payment. A job is `settled` only when a Base USDC tx matching the signed award verifies on-chain — settled means PAID, never delivered.' };
         } else if (name === 'lawbor_graph') {
           // the agent-org dependency graph: nodes, edges, and the ready-to-claim frontier
           const { blocked: gBlocked } = node.store.control();
           const g = work.graphOf(node.store.all().filter((m) => !gBlocked.has(String(m.from).toLowerCase())));
           payload = { ...g, note: 'dependency = upstream AWARDED (a worker chosen), not delivered — no execution modelled' };
-        } else if (name === 'lawbor_post_job' || name === 'lawbor_bid' || name === 'lawbor_award') {
-          const kind = name === 'lawbor_post_job' ? 'help_wanted' : name === 'lawbor_bid' ? 'bid' : 'award';
+        } else if (name === 'lawbor_credit') {
+          // The rating. txFacts/resolveFacts are injected by server.js; used standalone (bin/lawbor-mcp.js
+          // with no chain reader) NOTHING verifies, so we return empty numbers and say exactly why rather
+          // than letting a caller read 0 as "this worker has no history".
+          const { blocked: cBlocked } = node.store.control();
+          const msgs = node.store.all().filter((m) => !cBlocked.has(String(m.from).toLowerCase()));
+          if (typeof deps.resolveFacts === 'function') await deps.resolveFacts(msgs);
+          const edges = work.settlementsFrom(msgs, { txFacts: deps.txFacts || null });
+          const c = creditFor(node.self, edges, { returnFlow: deps.returnFlow || null });
+          const pick = (m) => String(m.get(String(a.of).toLowerCase()) || 0);
+          const limits = c.limits.concat([
+            'this is THIS node\'s view only — no global score exists, and two nodes will disagree by design',
+            'cold start is total: a node that has paid nobody sees 0 for everyone, including honest workers',
+            'settled means PAID, never delivered — no escrow, no dispute path, no adjudicator',
+          ], deps.txFacts ? [] : ['no chain reader is wired here, so NO settlement can verify and every number is 0 — this is not evidence of a bad counterparty']);
+          payload = a.of
+            ? { viewer: node.self, of: String(a.of).toLowerCase(), directUsdcMicro: pick(c.direct), circleUsdcMicro: pick(c.circle),
+                evidence: c.evidence.filter((e) => e.worker === String(a.of).toLowerCase()), netted: c.netted, limits }
+            : { viewer: node.self,
+                direct: [...c.direct.entries()].sort((x, y) => y[1] - x[1]).map(([addr, m]) => ({ addr, usdcMicro: String(m) })),
+                circle: [...c.circle.entries()].sort((x, y) => y[1] - x[1]).map(([addr, m]) => ({ addr, usdcMicro: String(m) })),
+                evidence: c.evidence, netted: c.netted, limits };
+        } else if (name === 'lawbor_post_job' || name === 'lawbor_bid' || name === 'lawbor_award' || name === 'lawbor_settle') {
+          const kind = name === 'lawbor_post_job' ? 'help_wanted' : name === 'lawbor_bid' ? 'bid'
+            : name === 'lawbor_settle' ? 'settle' : 'award';
           // Actor rules run BEFORE the envelope is built. Checking them only when rendering would
           // make them decorative — the same mistake as the ungated POST /peers side-door.
           const job = work.foldThread(node.store.all()).get(a.jobId);
