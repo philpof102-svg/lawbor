@@ -118,6 +118,45 @@ const good = () => ({ sigFacts: new Map([[SIG, { signer: B }]]) });
     assert.equal(createAuthVerifier({ viem: null }), null);
   });
 
+  /* THE GAP THAT LET THE REAL BUG SHIP. Every test above injects sigFacts by hand, so none of them ever
+   * executes server.js::resolveFacts — the code that actually turns a signature into a fact. In
+   * production that function began with `if (!chain) return`, so on a node with LAWBOR_RPC_URL=off a key
+   * proof could NEVER verify: the one feature that needs no chain was sitting behind the chain gate.
+   * A live two-node run caught it; the whole unit suite could not. So this test goes through the real
+   * server with NO chain reader at all. */
+  await t('END TO END WITH NO CHAIN: a key proof verifies on a node that has no RPC', async () => {
+    let accounts; try { accounts = require('viem/accounts'); } catch { console.log('      (viem absent — skipped)'); return; }
+    const os = require('node:os'), path = require('node:path'), fs = require('node:fs');
+    const { build } = require('../server');
+    const { createStore } = require('../lib/store');
+    const { keyProofMessage } = require('../lib/verify');
+
+    const worker = accounts.privateKeyToAccount('0x' + 'd4'.repeat(32));
+    const me = '0x' + 'ee'.repeat(20);
+    const base = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lawbor-kp-')), 'store');
+    const store = createStore(base + '.jsonl', base + '.control');
+
+    const s = build({
+      self: me, store, chain: null,                     // <- NO CHAIN. This is the whole point.
+      preflight: async () => ({ decision: 'PROCEED', score: 90 }),
+      allowUnauthenticated: true, allowLoopback: true, allowInsecure: true,
+    });
+
+    const sig = await worker.signMessage({ message: keyProofMessage(worker.address) });
+    // record the two envelopes directly — we are testing RESOLUTION, not transport
+    for (const [from, to, body] of [
+      [me, worker.address, work.buildWork('help_wanted', { jobId: 'j', task: 'work' })],
+      [worker.address, me, work.buildWork('validate', { jobId: 'j', keyAddr: worker.address, keySig: sig })],
+      [me, worker.address, work.buildWork('award', { jobId: 'j', worker: worker.address, price: '10 USDC' })],
+    ]) store.record({ id: '0x' + Math.random().toString(16).slice(2), thread: 't', from, to, body, ts: 1 }, { origin: 'bot', dir: 'out' });
+
+    await s.resolveFacts(store.all());
+    const job = work.foldThread(store.all(), s.foldOpts).get('j');
+    assert.equal(job.validations[0].verified, true, 'resolveFacts must verify a signature WITHOUT a chain reader');
+    assert.equal(job.payeeProved, true);
+    assert.equal(job.pathValidated, false, 'and still only the key, never the rail');
+  });
+
   console.log('\n' + pass + ' passed, ' + fail + ' failed\n');
   process.exit(fail ? 1 : 0);
 })();

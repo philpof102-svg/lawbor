@@ -151,7 +151,16 @@ async function dispatch(msg, deps = {}) {
           // Actor rules run BEFORE the envelope is built. Checking them only when rendering would
           // make them decorative — the same mistake as the ungated POST /peers side-door.
           const job = work.foldThread(node.store.all()).get(a.jobId);
-          const may = work.mayApply(job, kind, node.self);
+          /* THE SAME OPTS THE HTTP ROUTE PASSES. This call used to pass NONE, so every option-driven rule
+           * silently did not exist on the MCP side: requireProofAbove (refuse to award above N to an
+           * address that has never proven its key) was enforced for a human on /work and skipped for an
+           * agent on /mcp. Two front doors, one gate, and only one door checked it — with the unchecked
+           * door being the one aimed at autonomous agents. */
+          const proven = deps.provenAddrs ? deps.provenAddrs() : undefined;
+          const may = work.mayApply(job, kind, node.self, {
+            requireProofAbove: deps.requireProofAbove, proven,
+            worker: a.worker, price: a.price, keySig: a.keySig, keyAddr: a.keyAddr,
+          });
           if (!may.ok) return ok({ content: [{ type: 'text', text: 'refused: ' + may.reason }], isError: true });
           const wbody = work.buildWork(kind, a);
           const r = a.as === 'human' ? await node.say(a.to, wbody, {}) : await node.botSay(a.to, wbody, {});

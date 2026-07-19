@@ -409,6 +409,25 @@ function build(deps = {}) {
    *  log can never turn one HTTP request into hundreds of RPC calls. Best-effort: a miss just stays
    *  unverified (and therefore confers nothing) until the next read. */
   async function resolveFacts(messages, budget = 20) {
+    /* SIGNATURE PROOFS FIRST, AND OUTSIDE THE CHAIN GATE. They were resolved inside the loop below,
+     * which sits after `if (!chain) return` — so on a node with LAWBOR_RPC_URL=off, a key proof could
+     * never verify. It needs no chain: that is its entire point (no gas, no USDC, an empty wallet can
+     * prove itself). I wrote the gate and then put the one feature that does not need it behind it.
+     * Found by running the live test, not by reading the code — the unit tests inject sigFacts directly
+     * and so never execute this function at all, which is exactly how `validate` txHashes went
+     * unresolved for weeks earlier today. */
+    if (verifyAuth) {
+      for (const m of messages) {
+        const w = work.parseWork(m && m.body);
+        if (!w || w.kind !== 'validate' || !w.keySig || !w.keyAddr || sigFacts.has(w.keySig)) continue;
+        try {
+          const v = await verifyAuth({ message: keyProofMessage(w.keyAddr), sig: w.keySig, claimed: w.keyAddr });
+          // Store ONLY on success. A cached failure would freeze a verifier outage into a permanent
+          // "this key is not held", which is a lie about someone else's wallet.
+          if (v && v.ok === true) sigFacts.set(w.keySig, { signer: String(v.signer).toLowerCase() });
+        } catch { /* unverified ⇒ confers nothing, retried next read */ }
+      }
+    }
     if (!chain) return txFacts;
     const wanted = [];
     for (const m of messages) {
@@ -417,17 +436,6 @@ function build(deps = {}) {
       // invisible to the unit tests, which inject txFacts directly, and caught only by running it live
       // against Base. Any verb that names a transaction must be resolved here, or it silently never works.
       if (w && (w.kind === 'settle' || w.kind === 'validate') && w.txHash && !txFacts.has(w.txHash)) wanted.push(w.txHash);
-      // Signature proofs resolve here too. Cheap and local (no RPC), but it must happen in the SAME
-      // place: the last time a verb that cites evidence was resolved anywhere else, every `validate`
-      // stayed silently unverified for weeks because only `settle` was being resolved.
-      if (w && w.kind === 'validate' && w.keySig && w.keyAddr && !sigFacts.has(w.keySig) && verifyAuth) {
-        try {
-          const v = await verifyAuth({ message: keyProofMessage(w.keyAddr), sig: w.keySig, claimed: w.keyAddr });
-          // Store ONLY on success. A cached failure would freeze a verifier outage into a permanent
-          // "this key is not held", which is a lie about someone else's wallet.
-          if (v && v.ok === true) sigFacts.set(w.keySig, { signer: String(v.signer).toLowerCase() });
-        } catch { /* unverified ⇒ confers nothing, retried next read */ }
-      }
     }
     for (const h of [...new Set(wanted)].slice(0, budget)) {
       try { const f = await chain.checkTx(h); if (f) rememberFact(h, f); } catch {}
@@ -633,7 +641,7 @@ function build(deps = {}) {
           await resolveFacts(wMsgs);
           proven = work.provenFrom(wMsgs, foldOpts);
         }
-        const may = work.mayApply(job, a.kind, node.self, { requireProofAbove, proven, worker: a.worker, price: a.price });
+        const may = work.mayApply(job, a.kind, node.self, { requireProofAbove, proven, worker: a.worker, price: a.price, keySig: a.keySig, keyAddr: a.keyAddr });
         if (!may.ok) return json(res, 409, { error: may.reason });
         let wbody; try { wbody = work.buildWork(a.kind, a); } catch (e) { return json(res, 400, { error: e.message }); }
         // `as` decides which of the two views this lands in: a person posting a job is 'human',
@@ -800,7 +808,8 @@ function build(deps = {}) {
               result: { content: [{ type: 'text', text: 'refused: ' + ((msg.params || {}).name || 'this tool') + ' writes, and this node only accepts writes from its operator. Read-only tools (whoami, jobs, graph, wanted, credit, inbox, watch, thread, requests) are open to everyone. To write, run your own node: `npx -y -p lawbor-bot lawbor-mcp` (MIT, zero runtime deps), or clone https://github.com/philpof102-svg/lawbor.' }], isError: true } });
           }
         }
-        const out = await mcpDispatch(msg, { node, apps, txFacts, resolveFacts, returnFlow: deps.returnFlow || null });
+        const out = await mcpDispatch(msg, { node, apps, txFacts, resolveFacts, returnFlow: deps.returnFlow || null,
+          requireProofAbove, provenAddrs: () => work.provenFrom(store.all(), foldOpts) });
         return out ? json(res, 200, out) : res.writeHead(204, CORS) || res.end();   // notification → 204
       }
       if (req.method === 'GET' && url === '/.well-known/mcp.json') {
@@ -833,7 +842,13 @@ function build(deps = {}) {
       return json(res, 404, { error: 'GET /health,/inbox,/requests,/bot-activity,/thread,/jobs,/graph,/apps,/skill.md,/app/<name>/... · POST /say,/bot/say,/block,/unblock,/accept,/delete,/work,/x402/settle,/lawbor/*,/peers' });
     } catch (e) { return json(res, 500, { error: e.message }); }
   });
-  return { server, node, mesh, startHeartbeat, stopHeartbeat };
+  /* resolveFacts + foldOpts are exposed ON PURPOSE. Every fact this node treats as evidence is produced
+   * by resolveFacts, and nothing could reach it from a test — the unit suite injects txFacts/sigFacts by
+   * hand, so the function that builds them in production ran only in production. Two bugs shipped
+   * through that hole in one day: `validate` txHashes never resolved (only `settle` was), and key proofs
+   * placed behind the `if (!chain) return` gate they do not need. Both were found by running a live
+   * node. This is the seam that makes them testable. */
+  return { server, node, mesh, startHeartbeat, stopHeartbeat, resolveFacts, foldOpts };
 }
 
 module.exports = { build };
