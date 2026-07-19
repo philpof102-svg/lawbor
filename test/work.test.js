@@ -163,11 +163,14 @@ t('jobsFrom returns newest-first across many jobs', () => {
 });
 
 // --- the honesty guard ------------------------------------------------------------------------
-t('no settlement anywhere: work.js never touches funds, and says so', () => {
+t('work.js still moves no funds and holds no key — settle only RECORDS a verifiable pointer', () => {
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'lib', 'work.js'), 'utf8');
-  assert.ok(!/require\(/.test(src.replace(/^[\s\S]*?\*\//, '')), 'pure — no imports at all');
-  assert.ok(!/transfer|approve|escrow|signTransaction|sendTransaction/i.test(src.split('module.exports')[0].replace(/\/\*[\s\S]*?\*\//g, '')));
-  assert.match(src, /It is not a labour market, because no exchange occurs/);
+  const code = src.replace(/^[\s\S]*?\*\//, '').replace(/\/\*[\s\S]*?\*\//g, '');   // strip the header + block comments
+  assert.ok(!/require\(/.test(code), 'pure — no imports at all');
+  // it names USDC and verifies a tx, but never CALLS a transfer/approve/escrow/sign — it moves nothing
+  assert.ok(!/\.transfer\(|\.approve\(|escrow|signTransaction|sendTransaction/i.test(code), 'no fund-moving or signing call');
+  assert.match(src, /LAWBOR still\s*\n?\s*\*?\s*holds no key, moves no funds/, 'the header states the invariant');
+  assert.match(src, /`settled` means paid — never delivered/, 'and states settled != delivered');
 });
 
 // ---- dependency graph: jobs that wait on jobs (the agent-org coordination layer) -----------------
@@ -233,6 +236,80 @@ t('buildWork strips a self-dependency and dedupes, and an unknown dep just block
   assert.deepEqual(w.dependsOn, ['up', 'ghost'], 'self removed, dup collapsed');
   const jobs = foldThread([row(REQ, W1, body)]);
   assert.deepEqual(jobs.get('z').blockedBy, ['up', 'ghost'], 'unknown upstreams block until they exist+award');
+});
+
+// ---- settle: bind a job to a REAL, refutable Base USDC transfer (the unforgeable primitive) --------
+console.log('\nLAWBOR work — settle (job ↔ verified Base USDC tx), the input to the rating:');
+const { settlementsFrom, USDC_BASE } = require('../lib/work');
+const TX = '0x' + 'ab'.repeat(32);
+const fact = (over) => ({ chainId: 8453, token: USDC_BASE, from: REQ, to: W1, valueMicro: '500000000', confirmations: 12, blockTime: 1700000000, ...over });
+// a job awarded to W1 at price, ready to be settled
+const awarded = () => [
+  row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' })),
+  row(W1, REQ, buildWork('bid', { jobId: 'j1', price: '500 USDC' })),
+  row(REQ, W1, buildWork('award', { jobId: 'j1', worker: W1, price: '500 USDC' })),
+];
+
+t('a settle with a MATCHING chain fact verifies → job becomes settled', () => {
+  const m = [...awarded(), row(REQ, W1, buildWork('settle', { jobId: 'j1', txHash: TX, amountMicro: '500000000' }))];
+  const facts = new Map([[TX, fact()]]);
+  const j = foldThread(m, { txFacts: facts }).get('j1');
+  assert.equal(j.state, 'settled');
+  assert.equal(j.settlement.from, REQ.toLowerCase());
+  assert.equal(j.settlement.to, W1.toLowerCase());
+  assert.equal(settlementsFrom(m, { txFacts: facts }).length, 1);
+});
+
+t('FAIL-CLOSED: no chain fact ⇒ claim recorded but unverified, state unchanged, NO credit edge', () => {
+  const m = [...awarded(), row(REQ, W1, buildWork('settle', { jobId: 'j1', txHash: TX, amountMicro: '500000000' }))];
+  const j = foldThread(m).get('j1');            // no txFacts injected
+  assert.equal(j.state, 'awarded', 'no fact ⇒ not promoted');
+  assert.equal(j.settleClaims[0].verified, false);
+  assert.equal(settlementsFrom(m).length, 0, 'an unverified settlement is not a rating edge');
+});
+
+t('a fact with the WRONG amount / token / payee does not verify (every field is checked)', () => {
+  const m = [...awarded(), row(REQ, W1, buildWork('settle', { jobId: 'j1', txHash: TX, amountMicro: '500000000' }))];
+  for (const bad of [{ valueMicro: '499999999' }, { token: '0x' + '00'.repeat(20) }, { to: W2 }, { chainId: 1 }, { confirmations: 3 }]) {
+    const j = foldThread(m, { txFacts: new Map([[TX, fact(bad)]]) }).get('j1');
+    assert.equal(j.state, 'awarded', 'mismatch on ' + Object.keys(bad)[0] + ' must not verify');
+  }
+});
+
+t('only the requester or the awarded worker may settle — a third party cannot', () => {
+  const facts = new Map([[TX, fact()]]);
+  const stranger = [...awarded(), row(W2, REQ, buildWork('settle', { jobId: 'j1', txHash: TX, amountMicro: '500000000' }))];
+  assert.equal(foldThread(stranger, { txFacts: facts }).get('j1').state, 'awarded', 'stranger settle ignored');
+  const byWorker = [...awarded(), row(W1, REQ, buildWork('settle', { jobId: 'j1', txHash: TX, amountMicro: '500000000' }))];
+  assert.equal(foldThread(byWorker, { txFacts: facts }).get('j1').state, 'settled', 'the worker may settle');
+});
+
+t('first-write-wins on a txHash: one transfer settles at most one job', () => {
+  const m = [
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'a', task: 't' })), row(REQ, W1, buildWork('award', { jobId: 'a', worker: W1, price: '500 USDC' })),
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'b', task: 't' })), row(REQ, W1, buildWork('award', { jobId: 'b', worker: W1, price: '500 USDC' })),
+    row(REQ, W1, buildWork('settle', { jobId: 'a', txHash: TX, amountMicro: '500000000' })),
+    row(REQ, W1, buildWork('settle', { jobId: 'b', txHash: TX, amountMicro: '500000000' })),   // reuse the SAME tx
+  ];
+  const jobs = foldThread(m, { txFacts: new Map([[TX, fact()]]) });
+  const settled = [...jobs.values()].filter((j) => j.state === 'settled');
+  assert.equal(settled.length, 1, 'the reused txHash settles exactly one job, not two');
+});
+
+t('a SETTLED upstream still satisfies a dependent job (settled ⊇ awarded)', () => {
+  const m = [
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'build', task: 'b' })), row(REQ, W1, buildWork('award', { jobId: 'build', worker: W1, price: '500 USDC' })),
+    row(REQ, W1, buildWork('settle', { jobId: 'build', txHash: TX, amountMicro: '500000000' })),
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'deploy', task: 'd', dependsOn: ['build'] })),
+  ];
+  const facts = new Map([[TX, fact()]]);
+  const dep = foldThread(m, { txFacts: facts }).get('deploy');
+  assert.equal(dep.ready, true, 'build is settled, so deploy is ready');
+});
+
+t('buildWork rejects a malformed txHash and a non-integer amount', () => {
+  assert.throws(() => buildWork('settle', { jobId: 'j1', txHash: '0xnope', amountMicro: '1' }), /32-byte tx hash/);
+  assert.throws(() => buildWork('settle', { jobId: 'j1', txHash: TX, amountMicro: '1.5' }), /amountMicro/);
 });
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
