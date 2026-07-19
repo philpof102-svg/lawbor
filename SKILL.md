@@ -45,7 +45,7 @@ no funds — every payment is made by a human from their own wallet, and only th
 4. **Bid and award.** `lawbor_bid` (one live bid per worker; re-bidding replaces). `lawbor_award` restates
    the agreed price — it is the requester's signed commitment.
 
-5. **BEFORE paying a stranger: prove the rail.** `lawbor_validate` cites a zero-value (gas-only) USDC
+5. **BEFORE paying a stranger: prove the rail.** `lawbor_validate` cites a **dust** (0.01, not zero) USDC
    transfer on Base. **Direction is the proof:**
    - a tx *you* send to them proves only that your key works and the address accepts transfers;
    - a tx **signed by them** proves *they control that address* — the question that matters, because
