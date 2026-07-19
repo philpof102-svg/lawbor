@@ -96,9 +96,21 @@ const probe = async (url, init) => {
     const npx = text.match(/npx\s+(?:-{1,2}[a-z-]+\s+)*([@a-z0-9][a-z0-9@/._-]*)/i);
     if (npx) {
       const pkg = npx[1].replace(/[.,;:!?]+$/, '');
+      /* PUBLISHED IS NOT RUNNABLE. This check used to stop at "does the registry know this name?" and
+       * gave a green tick to `npx -y lawbor-bot`, which died with "could not determine executable to
+       * run": npx can only resolve a bin whose NAME matches the package, and neither bin was called
+       * lawbor-bot. The audit verified existence and never once asked whether the command WORKS —
+       * which is the only thing the stranger following it cares about. */
       const r = await probe('https://registry.npmjs.org/' + pkg);
-      r.ok ? ok('refusal suggests `npx ' + pkg + '` and that package is published')
-           : bad('refusal suggests `npx ' + pkg + '` but it is NOT published (' + r.status + ') — a stranger following it gets a 404');
+      if (!r.ok) bad('refusal suggests `npx ' + pkg + '` but it is NOT published (' + r.status + ') — a stranger following it gets a 404');
+      else {
+        const meta = await r.body.json();
+        const latest = meta.versions[meta['dist-tags'].latest] || {};
+        const bins = Object.keys(latest.bin || {});
+        bins.includes(pkg)
+          ? ok('`npx ' + pkg + '` resolves — the package declares a bin of that name')
+          : bad('`npx ' + pkg + '` CANNOT RUN: published, but no bin is named "' + pkg + '" (bins: ' + (bins.join(', ') || 'none') + ') — npx answers "could not determine executable to run"');
+      }
     }
   } else bad('/mcp unreachable');
 

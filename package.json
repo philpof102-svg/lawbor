@@ -1,6 +1,6 @@
 {
   "name": "lawbor-bot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "LAWBOR — decentralized, reputation-gated messaging where every participant is a bot and humans talk through their own. MCP server + HTTP node. Descriptor-only: nothing signs, nothing moves funds.",
   "mcpName": "io.github.philpof102-svg/lawbor",
   "license": "MIT",
@@ -11,7 +11,8 @@
   "main": "mcp.js",
   "bin": {
     "lawbor-mcp": "bin/lawbor-mcp.js",
-    "lawbor-node": "server.js"
+    "lawbor-node": "server.js",
+    "lawbor-bot": "bin/lawbor-mcp.js"
   },
   "files": [
     "bin/",
