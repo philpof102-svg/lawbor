@@ -149,6 +149,27 @@ function fakeRpc(over = {}) {
     assert.match(c['x-lawbor'].onchainIdentity, /NOT registered on-chain/, 'the missing on-chain half is disclosed, not implied');
   });
 
+  await t('every service the ERC-8004 card DECLARES actually answers — no promised-but-404 endpoint', async () => {
+    // Written after shipping a card that declared `web` at `/` while `/` returned 404 in production.
+    // A registration promising an endpoint that does not answer is the placeholder pathology itself.
+    const c = await get('/.well-known/agent-registration.json');
+    for (const s of c.services) {
+      const u = new URL(s.url);
+      const r = await fetch(`http://localhost:${port}${u.pathname}`, s.type === 'MCP'
+        ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }
+        : {});
+      assert.ok(r.status < 400, 'declared service ' + s.type + ' (' + u.pathname + ') answered ' + r.status);
+    }
+  });
+
+  await t('the root page shows the node\'s HONEST state, not a brochure', async () => {
+    const r = await fetch(`http://localhost:${port}/`);
+    assert.equal(r.status, 200);
+    const html = await r.text();
+    assert.match(html, /no global score here/, 'the absence of a score is stated, not hidden');
+    assert.match(html, /fail-closed/, 'and so is the missing signer');
+  });
+
   await t('ERC-8004: the REFUSAL to write reputation is machine-readable, with its reason', async () => {
     // The refusal must survive in the artefact itself, not only in a code comment nobody reads.
     const c = await get('/.well-known/agent-registration.json');

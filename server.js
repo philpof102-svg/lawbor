@@ -375,6 +375,14 @@ function build(deps = {}) {
       // verifiesSettlements is reported next to authenticatesSenders on purpose: both are "is this node
       // actually checking, or just accepting?" A node with no chain reader rates nothing, and says so.
       if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, verifiesSettlements: !!chain, consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only' });
+      /* The node's public face. The ERC-8004 card declares a `web` service at `/`, and `/` used to
+       * 404 — a registration promising an endpoint that does not answer is the exact placeholder
+       * pathology that card is written to avoid. Serving it is therefore not decoration. */
+      if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...CORS });
+        return res.end(require('./apps/home').page);
+      }
+
       if (req.method === 'GET' && url === '/.well-known/lawbor.json') return json(res, 200, { v: 1, addr: node.self, accept: '/lawbor/accept', minScore: MIN_SCORE, oracle: 'MainStreet', note: 'reputation-gated bot messaging' });
       /* The node's own agent image. Served from here on purpose: an ERC-8004 registration file needs an
        * `image`, and pointing at an external host we do not control is how a registration rots into the
