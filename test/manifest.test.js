@@ -14,6 +14,25 @@ const plugin = read('.claude-plugin/plugin.json');
 const market = read('.claude-plugin/marketplace.json');
 const pkg = read('package.json');
 
+
+// SCRIPTS-VS-FILES — a shipped script must point at a shipped file.
+// Found by reasoning about the tarball rather than the repo: package.json declared \n// while claims.cjs was not in , so the command documented as THE post-deploy check would have
+// failed for everyone who installed. Same broken-promise class as the ERC-8004 card and the npx line.
+t('every script that ships points at a file that ships (test/ exempt, by convention)', () => {
+  const p = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const shipped = new Set(p.files);
+  const dirs = p.files.filter((f) => f.endsWith('/'));
+  const inPkg = (f) => shipped.has(f) || dirs.some((d) => f.startsWith(d));
+  const missing = [];
+  for (const [name, cmd] of Object.entries(p.scripts)) {
+    if (name === 'test' || name === 'prepublishOnly') continue;   // tests are deliberately not shipped;
+    // prepublishOnly runs from the REPO before packing, so it never needs to exist in the tarball.
+    const m = String(cmd).match(/nodes+([w./-]+.c?js)/);
+    if (m && !inPkg(m[1])) missing.push('npm run ' + name + ' -> ' + m[1]);
+  }
+  assert.deepEqual(missing, [], 'these scripts ship but their files do not: ' + missing.join('; '));
+});
+
 console.log('openclaude plugin manifests:');
 
 t('plugin.json: name is non-empty and contains NO space (kebab-case rule in the schema)', () => {

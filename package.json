@@ -30,7 +30,9 @@
     ".claude-plugin/",
     "SKILL.md",
     "PRINCIPLES.md",
-    "RATING-DESIGN.md"
+    "RATING-DESIGN.md",
+    "claims.cjs",
+    "erc8004-register.cjs"
   ],
   "scripts": {
     "test": "node test/lawbor.test.js && node test/node.test.js && node test/server.test.js && node test/mcp.test.js && node test/manifest.test.js && node test/mesh.test.js && node test/beat.test.js && node test/work.test.js && node test/autopilot.test.js && node test/credit.test.js && node test/chain.test.js && node test/probation.test.js && node test/verify.test.js && node test/consent.test.js && node test/apps.test.js && node test/desktop.test.js",
@@ -45,7 +47,8 @@
     "oracle": "node sim/oracle.js",
     "sim:rating": "node sim/rating.js",
     "sim:bounty": "node sim/bounty.js",
-    "claims": "node claims.cjs"
+    "claims": "node claims.cjs",
+    "register": "node erc8004-register.cjs"
   },
   "keywords": [
     "mcp",
