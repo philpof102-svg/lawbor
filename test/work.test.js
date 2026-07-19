@@ -473,5 +473,44 @@ t('buildWork rejects a malformed txHash and a non-integer amount', () => {
   assert.throws(() => buildWork('settle', { jobId: 'j1', txHash: TX, amountMicro: '1.5' }), /amountMicro/);
 });
 
+/* THE GRAPH GATE MUST NOT FIRE ON A NODE THAT CANNOT KNOW.
+ * help_wanted is delivered point-to-point, so a downstream worker receives `verify` and never `build`.
+ * Their fold therefore reports `build` as blocking — not because it IS, but because they have never
+ * seen it. The gate used to refuse their bid on that basis, while the requester's node (which holds the
+ * whole graph) showed the same job ready and waiting for exactly that bid. Two nodes, two frontiers,
+ * and no supported route to reconcile them: found by an independent tester running the live path.
+ * These three cases pin the distinction between knowledge and its absence. */
+{
+  const RA = '0x' + 'a1'.repeat(20), RB = '0x' + 'b2'.repeat(20), RC = '0x' + 'c3'.repeat(20);
+  const hw = (id, deps) => buildWork('help_wanted', { jobId: id, task: id, ...(deps ? { dependsOn: deps } : {}) });
+  const fold = (msgs, id) => foldThread(msgs).get(id);
+
+  t('graph gate: a KNOWN unawarded upstream still refuses the bid — the gate itself is intact', () => {
+    const j = fold([
+      { id: '1', from: RA, to: RB, rxAt: 10, body: hw('build') },
+      { id: '2', from: RA, to: RC, rxAt: 20, body: hw('verify', ['build']) },
+    ], 'verify');
+    assert.deepEqual(j.blockedByUnknown, [], 'this node HAS build, so nothing is unknown');
+    const may = mayApply(j, 'bid', RC);
+    assert.equal(may.ok, false);
+    assert.match(may.reason, /blocked by unfinished dependencies: build/);
+  });
+
+  t('graph gate: an upstream this node has NEVER SEEN is not a verdict — the bid may travel', () => {
+    const j = fold([{ id: '2', from: RA, to: RC, rxAt: 20, body: hw('verify', ['build']) }], 'verify');
+    assert.deepEqual(j.blockedBy, ['build']);
+    assert.deepEqual(j.blockedByUnknown, ['build'], 'blocked ONLY because we were never sent it');
+    assert.equal(mayApply(j, 'bid', RC).ok, true,
+      'the refusal that binds is the requester\'s — they own the job and hold the whole graph');
+  });
+
+  t('graph gate: AWARD stays strict even on a partial view — a bid is an offer, an award is money', () => {
+    const j = fold([{ id: '2', from: RA, to: RC, rxAt: 20, body: hw('verify', ['build']) }], 'verify');
+    const may = mayApply(j, 'award', RA, { worker: RC, price: '8 USDC' });
+    assert.equal(may.ok, false, 'being conservative when unsure is the right asymmetry on the paying side');
+    assert.match(may.reason, /dependencies are unmet/);
+  });
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exitCode = fail ? 1 : 0;

@@ -10,14 +10,42 @@
 ```
 
 ## Why it's different
-- **No central server.** A bot only knows its peers; messages gossip hop-by-hop toward the destination.
-- **Reputation IS the spam filter.** A relay accepts/forwards a message only if the *sender bot* is
-  `PROCEED` on MainStreet with score ≥ floor. A burner bot can't flood the mesh (fail-closed if the
-  oracle is unreachable). This is the same "safe-to-pay" primitive, applied to "safe-to-talk".
-- **Humans never hold the wire.** You talk to *your* bot; it signs and relays on your behalf
-  (`viaHuman` provenance travels with the message). The bots keep the conversation alive between people.
-- **Descriptor-only, no keys here.** This repo BUILDS the signable envelope + decides accept/deliver/forward.
-  The bot-operator's key signs; transport is openclaude / OpenGateway. We never hold a key or send a byte.
+
+**A rating a collusion ring cannot farm.** This is the part that took five adversarially-farmed designs
+to reach, and everything else is plumbing around it. Standing is **conserved and debited**:
+
+> `Σ direct + Σ circle ≤ (1+α) × what YOU yourself irrecoverably spent`
+
+So a ring recycling a float earns **exactly zero** from anyone outside it, however genuine and however
+large its on-chain volume — the money never came from you, so there was never a budget to confer.
+Sybils split a fixed pool instead of multiplying it. There is **no global score**: two nodes will
+disagree about the same address, by design, and a `0` means *no history with us* — an absence, never a
+bad mark. The price is a total cold start, and there is no starter grant because a grant is instantly
+the new farm. See [`RATING-DESIGN.md`](RATING-DESIGN.md) for the four designs that died first.
+
+**Outcomes are proven PAID, not claimed.** Jobs form a dependency graph (`dependsOn`), so a swarm cannot
+bid on `deploy` before `build` is awarded. A settlement counts only when a real USDC transfer on Base
+matches the signed award field for field — chainId 8453, the USDC contract, payer = the requester who
+signed, payee = the awarded worker, exact amount, ≥12 confirmations. `settled` means **PAID**: never
+delivered, never that the work was any good. No escrow, no dispute path, no adjudicator — adding one
+re-introduces an authority nobody can make honest.
+
+**Humans talk through their own bot.** You speak to *your* bot; `viaHuman` provenance travels with the
+message, and a peer's autonomous chatter lands in a separate watch feed instead of your inbox. First
+contact from a stranger is quarantined in Requests until you accept — consent is local, and separate
+from reputation.
+
+**Descriptor-only: this node holds no key.** Every write returns an EIP-712 descriptor with
+`signed:false`. The **operator** signs, through a module they wrote (`LAWBOR_SIGNER`) that talks to their
+wallet, KMS or hardware — there is deliberately no `LAWBOR_PRIVATE_KEY`, because an env var we read would
+make us the custodian of every operator's key. No funds ever move through here.
+
+**Decentralized where it counts, and honest where it isn't.** State is folded from a local append-only
+log — no shared database, no consensus, nothing to be the authority of. But **admission** calls one HTTP
+oracle per inbound envelope, and the shipped default is a service *we* run. `preflight` has always been
+injectable, and `GET /health` now names the oracle and says plainly when it is ours, because a default
+nobody changes is an authority in practice. With `LAWBOR_ADMIT=probation`, an oracle outage admits at
+score 0 rather than refusing everyone — the same state a `CAUTION` answer already produces.
 
 ## Install
 

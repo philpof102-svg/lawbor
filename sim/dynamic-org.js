@@ -101,11 +101,20 @@ async function main() {
     readySet(g).join() === 'build' && blockedOf(g, 'verify') && blockedOf(g, 'verify').join() === 'build' && blockedOf(g, 'deploy').join() === 'verify');
   check('the graph knows its shape: 2 dependency edges, root = build', g.edges.length === 2 && g.roots.join() === 'build');
 
-  // ---- 2. the GRAPH gate: a reputable worker cannot bid a blocked job --------------------------
-  say('Dex tries to bid on deploy now — but deploy is blocked (verify not awarded). The graph gate refuses it.');
-  const earlyDeployBid = await post(DEX, '/work', { to: ORIN, kind: 'bid', jobId: 'deploy', price: '5' });
-  check('bid on a blocked job is refused by the graph gate (409, names the blocker)',
-    /blocked by/.test(earlyDeployBid.error || '') && (bidsOn(await graph(), 'deploy') || 0) === 0);
+  /* ---- 2. the GRAPH gate, enforced where the authoritative view is -----------------------------
+   * This used to assert that DEX's OWN node refuses the bid with "blocked by …". It passed, but for a
+   * reason that was not the property: Dex was sent `deploy` and never `verify`, so their fold called
+   * `verify` a blocker because they had never HEARD of it — a refusal grounded in ignorance, from the
+   * node least able to judge. Meanwhile Orin's node, holding the whole graph, recorded any bid that
+   * did reach it without checking anything (mayApply never ran on the receive path, and posting the raw
+   * work body via /say skipped it entirely).
+   * The invariant that is actually true, and now enforced in the fold: the bid may TRAVEL, and it does
+   * not COUNT on the requester's graph until the upstream is awarded. */
+  say('Dex bids on deploy while it is blocked (verify not awarded). The bid may travel — but it must not count.');
+  await post(DEX, '/work', { to: ORIN, kind: 'bid', jobId: 'deploy', price: '5' });
+  await settle();
+  check('a bid on a blocked job does not count on the REQUESTER\'s graph — the view that owns the job',
+    (bidsOn(await graph(), 'deploy') || 0) === 0);
 
   // ---- 3. the REPUTATION gate composes with the graph gate -------------------------------------
   say('Rando (15) bids on build — which IS ready. But he is below the floor, so the RELAY drops him before the graph is even consulted.');
