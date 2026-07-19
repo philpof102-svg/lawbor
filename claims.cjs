@@ -82,16 +82,23 @@ const probe = async (url, init) => {
     const j = await mcpWrite.body.json();
     const text = ((j.result || {}).content || [{}])[0].text || '';
     /refused/.test(text) ? ok('MCP write tool refuses a stranger') : bad('MCP WRITE TOOL ACCEPTED A STRANGER: ' + text.slice(0, 80));
-    // and whatever the refusal tells them to do next must itself exist
-    for (const url of (text.match(/https?:\/\/[^\s)]+/g) || [])) {
+    /* Whatever the refusal tells them to do next must itself exist. Both extractions below were WRONG
+     * on their first run, and the audit caught its own faults:
+     *   - the url regex swallowed the sentence's trailing full stop, so a live repo probed as ".../lawbor." → 404;
+     *   - `npx -y lawbor-bot` yielded "-y" as the package name, which of course is not published.
+     * An audit that reports false failures gets ignored exactly as fast as one that reports none. */
+    for (const raw of (text.match(/https?:\/\/[^\s)]+/g) || [])) {
+      const url = raw.replace(/[.,;:!?)\]]+$/, '');          // trailing sentence punctuation is not part of the url
       const r = await probe(url);
       r.ok ? ok('refusal points at a URL that exists: ' + url) : bad('refusal points at a DEAD url: ' + url + ' (' + (r.err || r.status) + ')');
     }
-    const npx = text.match(/npx\s+([a-z0-9@/._-]+)/i);
+    // skip npx flags (-y, --yes, …) to reach the actual package specifier
+    const npx = text.match(/npx\s+(?:-{1,2}[a-z-]+\s+)*([@a-z0-9][a-z0-9@/._-]*)/i);
     if (npx) {
-      const r = await probe('https://registry.npmjs.org/' + npx[1]);
-      r.ok ? ok('refusal suggests `npx ' + npx[1] + '` and that package is published')
-           : bad('refusal suggests `npx ' + npx[1] + '` but it is NOT published (' + r.status + ') — a stranger following it gets a 404');
+      const pkg = npx[1].replace(/[.,;:!?]+$/, '');
+      const r = await probe('https://registry.npmjs.org/' + pkg);
+      r.ok ? ok('refusal suggests `npx ' + pkg + '` and that package is published')
+           : bad('refusal suggests `npx ' + pkg + '` but it is NOT published (' + r.status + ') — a stranger following it gets a 404');
     }
   } else bad('/mcp unreachable');
 
