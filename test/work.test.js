@@ -3,7 +3,7 @@
 // tests are just "given these messages in this order, what is the job?".
 // Run: node test/work.test.js
 const assert = require('node:assert');
-const { buildWork, parseWork, foldThread, jobsFrom, graphOf, mayApply } = require('../lib/work');
+const { buildWork, parseWork, foldThread, jobsFrom, graphOf, mayApply, unseenDeps } = require('../lib/work');
 
 let pass = 0, fail = 0;
 const t = (n, fn) => { try { fn(); pass++; console.log('  ✓ ' + n); } catch (e) { fail++; console.log('  ✗ ' + n + '\n      ' + (e && e.message)); } };
@@ -509,6 +509,16 @@ t('buildWork rejects a malformed txHash and a non-integer amount', () => {
     const may = mayApply(j, 'award', RA, { worker: RC, price: '8 USDC' });
     assert.equal(may.ok, false, 'being conservative when unsure is the right asymmetry on the paying side');
     assert.match(may.reason, /dependencies are unmet/);
+  });
+
+  // C3's emitter-side warning (surfaced by both write doors via this shared helper): the deps this node
+  // has never seen, so posting a job that depends on them is flagged as a retention case, not hidden.
+  t('unseenDeps names only upstreams this node has NOT folded', () => {
+    const msgs = [{ id: '1', from: RA, to: RB, rxAt: 10, body: hw('build') }];
+    assert.deepEqual(unseenDeps(msgs, ['verify']), ['verify'], 'never seen → warned');
+    assert.deepEqual(unseenDeps(msgs, ['build']), [], 'known → no warning');
+    assert.deepEqual(unseenDeps(msgs, ['build', 'ship']), ['ship'], 'only the unseen ones');
+    assert.deepEqual(unseenDeps(msgs, undefined), [], 'no deps → nothing to warn');
   });
 }
 

@@ -164,7 +164,12 @@ async function dispatch(msg, deps = {}) {
           if (!may.ok) return ok({ content: [{ type: 'text', text: 'refused: ' + may.reason }], isError: true });
           const wbody = work.buildWork(kind, a);
           const r = a.as === 'human' ? await node.say(a.to, wbody, {}) : await node.botSay(a.to, wbody, {});
-          payload = { id: r.envelope.id, thread: r.envelope.thread, forwarded: r.forwarded, delivered: r.delivered, targets: r.targets || [], reason: r.reason || null, sign: r.sign };
+          // Same emitter-side warning as HTTP /work, via the shared helper so the two doors cannot drift:
+          // posting a dependsOn on an upstream this node has never seen is a retention case, surfaced not
+          // hidden. An autopilot reading this can choose to send the upstream too.
+          const unseen = kind === 'help_wanted' ? work.unseenDeps(node.store.all(), a.dependsOn) : [];
+          payload = { id: r.envelope.id, thread: r.envelope.thread, forwarded: r.forwarded, delivered: r.delivered, targets: r.targets || [], reason: r.reason || null, sign: r.sign,
+            ...(unseen.length ? { warnings: ['dependsOn ' + unseen.join(', ') + ' not in this node\'s log — the recipient will fold this job blockedByUnknown until those upstreams reach them.'] } : {}) };
         } else return err(-32602, `unknown tool: ${name}`);
         return ok({ content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false });
       } catch (e) { return ok({ content: [{ type: 'text', text: `tool error: ${e.message}` }], isError: true }); }

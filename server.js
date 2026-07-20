@@ -719,7 +719,19 @@ function build(deps = {}) {
               : 'not verified (yet): unknown tx, too few confirmations, or a from/to/amount mismatch. Confers no credit until it verifies.',
           };
         }
-        return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, delivered: r.delivered, sign: r.sign, reason: r.reason || null, ...(settled ? { settled } : {}), ...(validated ? { validated } : {}) });
+        /* C3's warning, not a refusal. Posting help_wanted with dependsOn on an upstream THIS node has
+         * never seen is not wrong — you may be assembling a graph top-down — but the recipient will fold
+         * that upstream as blockedByUnknown until it reaches them, and a silent success hides that. So we
+         * SURFACE it: delivered stays true, and warnings[] names the gap. An operator learns they created
+         * a retention case; an autopilot can choose to send the upstream too. It puts the information
+         * exactly where the invariant is still repairable — at emission — without lying about a state we
+         * did not verify. (Enforcement itself lives in the fold, receiver-side; this is only the heads-up.) */
+        const warnings = [];
+        if (a.kind === 'help_wanted') {
+          const unseen = work.unseenDeps(wMsgs, a.dependsOn);
+          if (unseen.length) warnings.push('dependsOn ' + unseen.join(', ') + ' not in this node\'s log — the recipient will show this job blockedByUnknown until those upstreams reach them. Send them too, or this is a retention case.');
+        }
+        return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, forwarded: r.forwarded, delivered: r.delivered, targets: r.targets || [], sign: r.sign, reason: r.reason || null, ...(warnings.length ? { warnings } : {}), ...(settled ? { settled } : {}), ...(validated ? { validated } : {}) });
       }
 
       /* THE WANTED BOARD — the open, claimable frontier, each poster annotated with OUR OWN verified
