@@ -90,7 +90,13 @@ async function mainstreetPreflight(addr) {
   // own x402 settlement index). Additive on the oracle side: decision/score are
   // unchanged, so the admission gate reads exactly what it always read.
   const viewer = SELF !== '0x0000000000000000000000000000000000000000' ? '?viewer=' + SELF : '';
-  const r = await fetch(MAINSTREET_URL + '/api/agent/preflight/' + encodeURIComponent(addr) + viewer, { headers: { 'x-ms-monitor': '1' } });
+  // BOUND THE ORACLE CALL. Without a timeout a slow/hanging oracle hangs fetch forever, which hangs
+  // node.receive, which hangs POST /lawbor/accept — so a NEWCOMER (whose never-seen address is the
+  // slowest to score) cannot reach the node at all. The relay already handles a preflight that THROWS
+  // (lib/relay.js: admit under probation, or fail-closed), but a hang is not a throw and never reaches
+  // that catch. AbortSignal turns the hang into a throw, restoring the relay's own outage handling.
+  const ms = Number(process.env.LAWBOR_PREFLIGHT_TIMEOUT_MS) || 6000;
+  const r = await fetch(MAINSTREET_URL + '/api/agent/preflight/' + encodeURIComponent(addr) + viewer, { headers: { 'x-ms-monitor': '1' }, signal: AbortSignal.timeout(ms) });
   if (!r.ok) throw new Error('preflight HTTP ' + r.status);
   return r.json();
 }
