@@ -619,5 +619,54 @@ t('buildWork rejects a malformed txHash and a non-integer amount', () => {
   });
 }
 
+// ---- bid GC: a retained bid that can no longer change anything may be dropped -------------------
+console.log('\nLAWBOR work — staleBidIds (bounded retention, never removes an actionable bid):');
+const { staleBidIds } = require('../lib/work');
+
+t('a CANCELLED job sheds every bid (nothing left to corroborate)', () => {
+  const m = [
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' })),
+    row(W1, REQ, buildWork('bid', { jobId: 'j1', price: '10' })),
+    row(W2, REQ, buildWork('bid', { jobId: 'j1', price: '9' })),
+    row(REQ, W1, buildWork('cancel', { jobId: 'j1' })),
+  ];
+  assert.equal(staleBidIds(m).length, 2, 'both bids on a cancelled job are collectable');
+});
+
+t('an AWARDED job sheds LOSERS but KEEPS the winner — award corroboration is fold-preserved', () => {
+  const m = [
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' })),
+    row(W1, REQ, buildWork('bid', { jobId: 'j1', price: '10' })),   // winner (m[1])
+    row(W2, REQ, buildWork('bid', { jobId: 'j1', price: '9' })),    // loser  (m[2])
+    row(REQ, W1, buildWork('award', { jobId: 'j1', worker: W1, price: '10' })),
+  ];
+  assert.equal(foldThread(m).get('j1').award.corroborated, true, 'baseline: award is corroborated');
+  const ids = new Set(staleBidIds(m));
+  assert.ok(ids.has(m[2].id) && !ids.has(m[1].id), 'loser collectable, winner kept');
+  const kept = m.filter((x) => !ids.has(x.id));               // simulate the GC
+  const after = foldThread(kept).get('j1');
+  assert.equal(after.state, 'awarded');
+  assert.equal(after.award.corroborated, true, 'corroboration survives the GC — actionable state unchanged');
+});
+
+t('a LIVE bid on a READY job is never collected, even with a tiny TTL', () => {
+  const m = [
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' })),
+    row(W1, REQ, buildWork('bid', { jobId: 'j1', price: '10' })),
+  ];
+  assert.equal(staleBidIds(m, { now: 9e12, bidTtlMs: 1 }).length, 0);
+});
+
+t('a STRANDED bid (blocked job) is collected only PAST the TTL, and only when the TTL is enabled', () => {
+  const m = [
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'j2', task: 't', dependsOn: ['j1'] }), 1000),
+    row(W1, REQ, buildWork('bid', { jobId: 'j2', price: '10' }), 2000),   // bid.at = rxAt = 2000
+  ];
+  assert.equal(foldThread(m).get('j2').ready, false, 'j2 is blocked — its upstream j1 was never seen');
+  assert.equal(staleBidIds(m, { now: 2500, bidTtlMs: 1000 }).length, 0, 'within TTL: kept (might still revive)');
+  assert.equal(staleBidIds(m, { now: 5000, bidTtlMs: 1000 }).length, 1, 'past TTL: stranded bid collected');
+  assert.equal(staleBidIds(m, { now: 9e12, bidTtlMs: 0 }).length, 0, 'bidTtlMs:0 disables the stranded class entirely');
+});
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exitCode = fail ? 1 : 0;

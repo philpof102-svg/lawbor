@@ -274,6 +274,18 @@ function build(deps = {}) {
     peers: () => mesh.addrs(),
     selectTargets: (to, opts) => mesh.selectTargets(to, opts) });
 
+  // Reap retained bids that can no longer change anything — a resolved job's losing
+  // bids always, and a stranded blocked-job bid once it is older than
+  // LAWBOR_BID_TTL_DAYS (0 = never; the stranded class stays off by default). Same
+  // operator-local, keyless, gossip-free path as the store compaction just above.
+  if (typeof node.gcBids === 'function') {
+    try {
+      const bidTtlMs = (Number(process.env.LAWBOR_BID_TTL_DAYS) || 0) * 86_400_000;
+      const r = node.gcBids({ bidTtlMs });
+      if (r.removed) console.log(`[lawbor] bid GC: dropped ${r.removed} of ${r.eligible} collectable bid(s)`);
+    } catch {}
+  }
+
   const json = (res, code, obj, extra) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*', ...(extra || {}) }); res.end(JSON.stringify(obj)); };
   /* setEncoding('utf8') matters: without it each chunk is a Buffer stringified INDEPENDENTLY, so a
    * multi-byte character split across two TCP chunks decodes as U+FFFD on both sides of the cut.
