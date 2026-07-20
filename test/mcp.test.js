@@ -154,6 +154,23 @@ const payload = (r) => JSON.parse(r.result.content[0].text);
     assert.equal(r.error.code, -32603);
   });
 
+  await t('a work reply CONTINUES the job thread; lawbor_thread shows the parsed haggle + the derived deal', async () => {
+    // Runs LAST: it adds work sends to the shared `sent`/store, so it must not precede count assertions.
+    const { buildWork } = require('../lib/work');
+    const { buildEnvelope } = require('../lib/envelope');
+    const offer = payload(await call('lawbor_offer', { to: B, jobId: 'th-neg', item: 'an MCP tool' }));
+    const th = offer.thread;
+    const q = payload(await call('lawbor_quote', { to: B, jobId: 'th-neg', amountMicro: '5000000' }));  // owner A quotes
+    assert.equal(q.thread, th, 'the quote reply CONTINUED the offer thread, it did not root a new one');
+    // a matching counterparty quote from B, in the same thread, so agreedPrice derives
+    node.store.record(buildEnvelope({ from: B, to: A, body: buildWork('quote', { jobId: 'th-neg', amountMicro: '5000000' }), thread: th, viaHuman: null }).envelope, { origin: 'bot', dir: 'in' });
+    const tr = payload(await call('lawbor_thread', { id: th }));
+    assert.ok(tr.messages.some((m) => m.work && m.work.kind === 'offer'), 'the offer is parsed inline (not an opaque blob)');
+    assert.ok(tr.messages.some((m) => m.work && m.work.kind === 'quote' && m.work.amountMicro === '5000000'), 'the quote is parsed inline — a readable number');
+    const j = tr.jobs.find((x) => x.jobId === 'th-neg');
+    assert.ok(j && j.agreedPrice && j.agreedPrice.amountMicro === '5000000', 'the DERIVED agreedPrice is visible in the thread view — one read = the whole deal');
+  });
+
   try { fs.unlinkSync(db); } catch {}
   console.log(`\n${pass} passed · ${fail} failed`);
   process.exit(fail ? 1 : 0);

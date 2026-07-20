@@ -89,7 +89,20 @@ async function dispatch(msg, deps = {}) {
           payload = { view: 'bot-activity', threads: node.store.botActivity(node.self, a.limit || 50) };
         } else if (name === 'lawbor_thread') {
           if (!a.id) return ok({ content: [{ type: 'text', text: 'tool error: id required' }], isError: true });
-          payload = { thread: a.id, messages: node.store.thread(a.id) };
+          // A thread is the WHOLE conversation: freeform chat AND the structured negotiation. A raw
+          // `quote`/`bid`/`offer` body is opaque JSON, and the DERIVED deal state (agreedPrice, award,
+          // settled) lived only in lawbor_jobs — so an agent reading a thread could not see where the
+          // haggle stood. Here each work message is parsed inline, and `jobs` carries the derived state
+          // of every negotiation in this thread: one read shows chat + structured offers + the deal.
+          const raw = node.store.thread(a.id);
+          const messages = raw.map((m) => { const w = work.parseWork(m.body); return w ? { ...m, work: w, body: undefined } : m; });
+          const jobs = [...work.foldThread(raw, { txFacts: deps.txFacts || null }).values()].map((j) => ({
+            jobId: j.jobId, state: j.state, isOffer: !!j.isOffer, requester: j.requester,
+            bids: (j.bids || []).length, quotes: (j.quotes || []).length,
+            agreedPrice: j.agreedPrice || null, award: j.award || null, settled: !!j.settlement,
+          }));
+          payload = { thread: a.id, messages, jobs,
+            note: 'work messages are parsed inline (message.work); `jobs` is the DERIVED negotiation state in this thread — agreedPrice, bids, award, settled. One read = the whole conversation.' };
         } else if (name === 'lawbor_requests') {
           payload = { view: 'requests', threads: node.store.requests(node.self, a.limit || 50), note: 'first contact — not yet in your inbox' };
         } else if (name === 'lawbor_block') {
@@ -242,7 +255,12 @@ async function dispatch(msg, deps = {}) {
           });
           if (!may.ok) return ok({ content: [{ type: 'text', text: 'refused: ' + may.reason }], isError: true });
           const wbody = work.buildWork(kind, a);
-          const r = a.as === 'human' ? await node.say(a.to, wbody, {}) : await node.botSay(a.to, wbody, {});
+          // A REPLY CONTINUES THE CONVERSATION. help_wanted/offer CREATE the job (job is null here, so a
+          // fresh thread is rooted); a bid/quote/award/settle/validate on an existing job inherits that
+          // job's thread, so the whole negotiation — post, haggle, award, settle — lives in ONE thread a
+          // reader can follow. The fold already stamps job.thread from the announcing message.
+          const wthread = job ? job.thread : undefined;
+          const r = a.as === 'human' ? await node.say(a.to, wbody, { thread: wthread }) : await node.botSay(a.to, wbody, { thread: wthread });
           // Same emitter-side warning as HTTP /work, via the shared helper so the two doors cannot drift:
           // posting a dependsOn on an upstream this node has never seen is a retention case, surfaced not
           // hidden. An autopilot reading this can choose to send the upstream too.

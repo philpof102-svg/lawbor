@@ -717,8 +717,12 @@ function build(deps = {}) {
         let wbody; try { wbody = work.buildWork(a.kind, a); } catch (e) { return json(res, 400, { error: e.message }); }
         // `as` decides which of the two views this lands in: a person posting a job is 'human',
         // a bot quoting autonomously is 'bot'. It is not cosmetic — it is the store view.
-        const r = a.as === 'human' ? await node.say(a.to, wbody, { thread: a.thread })
-                                   : await node.botSay(a.to, wbody, { thread: a.thread });
+        // A reply continues the job's thread (bid/quote/award/settle/validate inherit job.thread), so the
+        // whole negotiation lives in one followable thread; help_wanted/offer create it (job is null ⇒
+        // fresh thread). Caller-supplied a.thread is the fallback when the job is not known locally.
+        const wthread = (job && job.thread) || a.thread;
+        const r = a.as === 'human' ? await node.say(a.to, wbody, { thread: wthread })
+                                   : await node.botSay(a.to, wbody, { thread: wthread });
         // For a settle, resolve the chain fact right away and report HONESTLY whether it verified. A
         // settle that cannot be checked is not an error (the tx may simply be young) but the caller must
         // never be left believing a rating edge exists when none does.
@@ -956,7 +960,20 @@ function build(deps = {}) {
       // Local delete — remove an ALREADY-STORED body (block only stops future ones). IRREVERSIBLE, so
       // the operator gate matters most here: a stranger must never be able to wipe the operator's store.
       if (req.method === 'POST' && url === '/delete') { if (!(await operatorOk(req))) return denyOperator(res); const a = await body(req) || {}; if (!a.id) return json(res, 400, { error: 'id required' }); return json(res, 200, node.deleteMsg(a.id)); }
-      if (req.method === 'GET' && url === '/thread') { const id = q.get('id'); if (!id) return json(res, 400, { error: 'id required' }); return json(res, 200, { thread: id, messages: store.thread(id) }); }
+      if (req.method === 'GET' && url === '/thread') {
+        const id = q.get('id'); if (!id) return json(res, 400, { error: 'id required' });
+        // Enriched like the MCP lawbor_thread: work messages parsed inline + the DERIVED negotiation
+        // state (agreedPrice, bids, award, settled) of any job in this thread, so one read = the whole
+        // conversation (chat + structured haggle + where the deal stands).
+        const raw = store.thread(id);
+        const messages = raw.map((m) => { const w = work.parseWork(m.body); return w ? { ...m, work: w, body: undefined } : m; });
+        const jobs = [...work.foldThread(raw, foldOpts).values()].map((j) => ({
+          jobId: j.jobId, state: j.state, isOffer: !!j.isOffer, requester: j.requester,
+          bids: (j.bids || []).length, quotes: (j.quotes || []).length,
+          agreedPrice: j.agreedPrice || null, award: j.award || null, settled: !!j.settlement,
+        }));
+        return json(res, 200, { thread: id, messages, jobs });
+      }
 
       if (req.method === 'POST' && url === '/lawbor/accept') { const a = await body(req) || {}; if (!a.envelope) return json(res, 400, { error: 'envelope required' }); const r = await node.receive(a.envelope); return json(res, r.action === 'drop' ? 202 : 200, { action: r.action, reason: r.reason || null }); }
 
