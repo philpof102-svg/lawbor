@@ -51,6 +51,7 @@
     "oracle": "node sim/oracle.js",
     "sim:rating": "node sim/rating.js",
     "sim:bounty": "node sim/bounty.js",
+    "reward-proof": "node sim/reward-proof.js",
     "claims": "node claims.cjs",
     "register": "node erc8004-register.cjs",
     "structure": "node structure.cjs"
