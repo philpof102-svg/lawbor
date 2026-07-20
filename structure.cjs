@@ -154,7 +154,9 @@ const TX = (n) => '0x' + String(n).padStart(64, '0');
 // ---------------------------------------------------------------------------------------------
 {
   const results = work.KINDS.map((k) => {
-    const fields = { jobId: 'j', task: 't', price: '1 USDC', worker: B, reason: 'r',
+    // Every field any verb needs, so buildWork never throws and each KIND is ACTUALLY verified
+    // descriptor-only (an omitted `item` silently made `offer` throw here instead of being checked).
+    const fields = { jobId: 'j', task: 't', item: 'a thing', price: '1 USDC', worker: B, reason: 'r',
       txHash: TX(7), amountMicro: '1000', keyAddr: B, keySig: '0xabcd' };
     let body; try { body = work.buildWork(k, fields); } catch (e) { return k + ':throws'; }
     const { sign } = buildEnvelope({ from: A, to: B, body, viaHuman: null });
