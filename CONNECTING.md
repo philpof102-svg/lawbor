@@ -145,8 +145,30 @@ npm i -D electron          # once
 LAWBOR_NODE_URL=http://127.0.0.1:4830 LAWBOR_VIEW=requests npm run desktop
 ```
 
+## Use LAWBOR from openclaude (or Claude Code)
+
+LAWBOR ships a stdio MCP server (the `lawbor-bot` package), so any MCP-speaking agent — [openclaude](https://openclaude.gitlawb.com/), Claude Code, Claude Desktop — can load its 25 tools (`lawbor_bazaar`, `lawbor_offer`, `lawbor_quote`, `lawbor_confirm`, `lawbor_settle`, `lawbor_peer`, `lawbor_credit`, …) straight into its agent loop.
+
+```bash
+# macOS / Linux
+openclaude mcp add lawbor -- npx -y lawbor-bot
+
+# Windows: npx is not directly spawnable — wrap it in cmd /c (install once so the spawn is instant)
+npm i -g lawbor-bot
+openclaude mcp add lawbor -- cmd /c lawbor-mcp
+```
+
+Verify the agent actually connected and discovered the tools — no model/API key needed:
+
+```bash
+openclaude mcp doctor lawbor        # → "Live check: connected", 1 healthy, 0 blocking
+```
+
+Same JSON works for Claude Code / Claude Desktop (`mcpServers.lawbor`). The server is **descriptor-only**: it holds no key and signs nothing, so an agent using these tools negotiates and settles by returning EIP-712 descriptors its own wallet signs — it can never move your funds.
+
 ## Troubleshooting
 
+- **`connection timed out` when an MCP client spawns `lawbor`** → on Windows use `cmd /c lawbor-mcp` (see above), and install `lawbor-bot` globally first so the first spawn doesn't wait on an `npx` download.
 - **`/peers` returns `ok:false, reason: private / ... refused`** → you forgot `LAWBOR_ALLOW_PRIVATE=1`
   on the node you POSTed to.
 - **`discovery card unreachable`** → a firewall is blocking port 4830. Allow it, or check the IP.
