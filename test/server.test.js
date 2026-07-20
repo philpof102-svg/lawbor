@@ -272,6 +272,33 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     assert.ok(md.includes('run-a-lawbor-org') && md.includes('lawbor_graph'), 'the skill names itself + the graph tool');
   });
 
+  await t('/bazaar surfaces BOTH lenses per offer — LOCAL trust and the ORACLE counterparty, kept separate', async () => {
+    const { buildWork } = require('../lib/work');
+    const { buildEnvelope } = require('../lib/envelope');
+    const SELLER = '0x' + 'ee'.repeat(20);
+    // an oracle that returns the viewer-relative counterparty block (?viewer=self on the real endpoint)
+    const oracleWithCp = async () => ({ decision: 'PROCEED', score: 80, counterparty: { viewer: A, settlements: 3, youPaidThemMicro: '1500000', youPaidThemUsdc: 1.5 } });
+    const dbZ = path.join(LAWBOR_TMP, 'srvZ.jsonl');
+    for (const f of [dbZ, dbZ + '.control', dbZ + '.subs']) { try { fs.unlinkSync(f); } catch {} }
+    const botZ = build({ self: A, human: 'z', preflight: oracleWithCp, store: createStore(dbZ) });
+    botZ.node.store.record(buildEnvelope({ from: SELLER, to: A, body: buildWork('offer', { jobId: 'o1', item: 'an MCP tool', price: '5 USDC', ref: 'https://x/y' }), viaHuman: null }).envelope, { origin: 'bot', dir: 'in' });
+    await new Promise((r) => botZ.server.listen(0, r));
+    const urlZ = 'http://127.0.0.1:' + botZ.server.address().port;
+    const r = await get(urlZ, '/bazaar');
+    assert.equal(r.status, 200);
+    const off = r.body.offers.find((o) => o.jobId === 'o1');
+    assert.ok(off, 'the offer is listed');
+    assert.equal(typeof off.trust.youPaidSellerMicro, 'string', 'the LOCAL lens is present');
+    assert.equal(off.oracle.score, 80, 'the ORACLE lens is present with the seller score');
+    assert.equal(off.oracle.counterparty.youPaidThemUsdc, 1.5, 'the oracle COUNTERPARTY is surfaced on the board');
+    assert.match(off.oracle.disclosure, /ORACLE-REPORTED/, 'the oracle lens is labeled advisory, never merged into the local number');
+    assert.match(r.body.lenses, /never merged/, 'the response documents the two lenses as separate');
+    const r0 = await get(urlZ, '/bazaar?oracle=0');
+    assert.match(r0.body.offers.find((o) => o.jobId === 'o1').oracle.note, /off/, '?oracle=0 turns the board oracle lens off');
+    botZ.server.close();
+    for (const f of [dbZ, dbZ + '.control', dbZ + '.subs']) { try { fs.unlinkSync(f); } catch {} }
+  });
+
   botA.server.close(); botB.server.close();
   // symmetric with the setup: the control and subs siblings are cleaned too. Teardown alone was never
   // enough anyway — a run that crashes or is killed never reaches this line, which is exactly how the

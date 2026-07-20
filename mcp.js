@@ -133,13 +133,30 @@ async function dispatch(msg, deps = {}) {
           const zJobs = [...work.foldThread(zMsgs, { txFacts: deps.txFacts || null }).values()].filter((j) => j.isOffer);
           const zc = creditFor(node.self, work.settlementsFrom(zMsgs, { txFacts: deps.txFacts || null }), { returnFlow: deps.returnFlow || null });
           const ofFilter = a.of ? String(a.of).toLowerCase() : null;
+          const shown = zJobs.filter((j) => !ofFilter || j.requester === ofFilter).sort((x, y) => y.at - x.at);
+          // ORACLE LENS on the board — the SAME two-lens composition as lawbor_vet,
+          // per offer. Bounded: dedupe sellers, cap the lookups, per-call timeout, and
+          // kept SEPARATE from the local number (averaging would launder "MainStreet
+          // said" into "this node verified"). Suppress with arguments.oracle:false.
+          const wantOracle = a.oracle !== false && typeof deps.preflight === 'function';
+          const CAP = 25;
+          const uniq = wantOracle ? [...new Set(shown.map((j) => j.requester))].slice(0, CAP) : [];
+          const oracleBy = new Map(await Promise.all(uniq.map(async (s) => {
+            try {
+              const p = await Promise.race([deps.preflight(s), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))]);
+              return [s, { source: 'MainStreet preflight', decision: p.decision || null, score: p.score ?? null, counterparty: p.counterparty || null,
+                disclosure: 'ORACLE-REPORTED: MainStreet\'s x402 settlement index; not verified by this node, does NOT enter local standing.' }];
+            } catch (e) { return [s, { error: 'oracle unreachable: ' + (e && e.message), disclosure: 'advisory only — mesh admission elsewhere stays fail-closed' }]; }
+          })));
           payload = {
-            offers: zJobs.filter((j) => !ofFilter || j.requester === ofFilter).sort((x, y) => y.at - x.at).map((j) => ({
+            offers: shown.map((j) => ({
               jobId: j.jobId, item: j.item, price: j.price, ref: j.ref, tags: j.tags, seller: j.requester, thread: j.thread,
-              // THE trust number: what YOU have paid this seller, conserved and unfarmable. The raw count
-              // is shown but explicitly NOT a trust signal (a seller can sybil-buy their own listing).
+              // THE local trust number: what YOU have paid this seller, conserved and unfarmable. The raw
+              // count is shown but explicitly NOT a trust signal (a seller can sybil-buy their own listing).
               trust: { youPaidSellerMicro: String(zc.direct.get(j.requester) || 0), verifiedPurchases_NOT_a_trust_signal: (j.purchases || []).filter((p) => p.verified).length },
+              oracle: wantOracle ? (oracleBy.get(j.requester) || { note: 'not fetched — capped at ' + CAP + ' unique sellers' }) : { note: 'oracle lens off' },
             })),
+            lenses: 'trust = what THIS node verified on-chain (conserved, unfarmable). oracle = MainStreet advisory (ORACLE-REPORTED, viewer-relative, never enters local standing). Separate, never merged.',
             note: 'buy: agree a price by lawbor_say, pay the seller in USDC on Base yourself, then lawbor_settle with the txHash against the offer jobId. Trust = what YOU paid this seller (conserved, unfarmable); the purchase count is NOT trust (a seller can buy their own listing).',
           };
         } else if (name === 'lawbor_vet') {

@@ -286,6 +286,25 @@ function build(deps = {}) {
     } catch {}
   }
 
+  // Oracle-lens cache for the board: /bazaar is a public GET, so calling the oracle
+  // per seller on every hit is an amplifier a stranger could drive. Dedupe + cap +
+  // this 60s per-seller cache bound the outbound fan-out to at most CAP calls/minute.
+  const _oracleCache = new Map();   // seller → { at, val }
+  const oracleLens = async (seller, pf) => {
+    const hit = _oracleCache.get(seller);
+    if (hit && (Date.now() - hit.at) < 60_000) return hit.val;
+    let val;
+    try {
+      const p = await Promise.race([pf(seller), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))]);
+      val = { source: 'MainStreet preflight', decision: p.decision || null, score: p.score ?? null, counterparty: p.counterparty || null,
+        disclosure: 'ORACLE-REPORTED: MainStreet\'s x402 settlement index, a service this node\'s operator may not control. Not verified by this node; does NOT enter local standing.' };
+    } catch (e) {
+      val = { error: 'oracle unreachable: ' + (e && e.message), disclosure: 'advisory only — mesh admission elsewhere stays fail-closed' };
+    }
+    _oracleCache.set(seller, { at: Date.now(), val });
+    return val;
+  };
+
   const json = (res, code, obj, extra) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*', ...(extra || {}) }); res.end(JSON.stringify(obj)); };
   /* setEncoding('utf8') matters: without it each chunk is a Buffer stringified INDEPENDENTLY, so a
    * multi-byte character split across two TCP chunks decodes as U+FFFD on both sides of the cut.
@@ -767,18 +786,29 @@ function build(deps = {}) {
         await resolveFacts(zMsgs);
         const zc = creditFor(node.self, work.settlementsFrom(zMsgs, foldOpts), { returnFlow: deps.returnFlow || null });
         const of = q.get('of') ? String(q.get('of')).toLowerCase() : null;
-        const offers = [...work.foldThread(zMsgs, foldOpts).values()]
+        const rawOffers = [...work.foldThread(zMsgs, foldOpts).values()]
           .filter((j) => j.isOffer && (!of || j.requester === of))
-          .sort((a, b) => b.at - a.at)
-          .map((j) => ({
-            jobId: j.jobId, item: j.item, price: j.price, ref: j.ref, tags: j.tags, seller: j.requester, thread: j.thread,
-            trust: {
-              youPaidSellerMicro: String(zc.direct.get(j.requester) || 0),
-              verifiedPurchases: (j.purchases || []).filter((p) => p.verified).length,
-              note: 'youPaidSellerMicro is the trust number — conserved, unfarmable. verifiedPurchases is NOT a trust signal (a seller can sybil-buy their own listing; it earns an outsider nothing).',
-            },
-          }));
+          .sort((a, b) => b.at - a.at);
+        // ORACLE LENS on the board — the same two-lens composition lawbor_vet uses,
+        // now per offer. Bounded: dedupe sellers, cap the lookups, cache 60s, and
+        // keep it SEPARATE from the local number — averaging would launder "the
+        // oracle said" into "we verified". Default on unless ?oracle=0.
+        const ORACLE_CAP = 25;
+        const wantOracle = q.get('oracle') !== '0' && (deps.preflight || mainstreetPreflight);
+        const sellers = wantOracle ? [...new Set(rawOffers.map((j) => j.requester))].slice(0, ORACLE_CAP) : [];
+        const pf = deps.preflight || mainstreetPreflight;
+        const oracleBySeller = new Map(await Promise.all(sellers.map(async (s) => [s, await oracleLens(s, pf)])));
+        const offers = rawOffers.map((j) => ({
+          jobId: j.jobId, item: j.item, price: j.price, ref: j.ref, tags: j.tags, seller: j.requester, thread: j.thread,
+          trust: {
+            youPaidSellerMicro: String(zc.direct.get(j.requester) || 0),
+            verifiedPurchases: (j.purchases || []).filter((p) => p.verified).length,
+            note: 'youPaidSellerMicro is the LOCAL trust number — conserved, unfarmable, verified by THIS node. verifiedPurchases is NOT a trust signal (a seller can sybil-buy their own listing; it earns an outsider nothing).',
+          },
+          oracle: wantOracle ? (oracleBySeller.get(j.requester) || { note: 'not fetched — board oracle lookups capped at ' + ORACLE_CAP + ' unique sellers' }) : { note: 'oracle lens off (?oracle=0)' },
+        }));
         return json(res, 200, { viewer: node.self, offers,
+          lenses: 'trust = what THIS node verified on-chain (conserved, unfarmable). oracle = MainStreet\'s viewer-relative view (advisory, ORACLE-REPORTED, never enters local standing). Kept SEPARATE, never merged.',
           howToBuy: 'agree a price by /say, pay the seller in USDC on Base yourself, then /work kind:settle with the txHash against the offer jobId. settled means PAID.',
           limits: RATING_LIMITS });
       }
