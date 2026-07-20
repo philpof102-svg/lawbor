@@ -84,7 +84,24 @@ function parseAnchors(spec) {
   }).filter(Boolean);
 }
 
+// A SHORT-TTL admission cache. The oracle is consulted on EVERY inbound envelope, so a burst from
+// many newcomers (Phil's "grand nombre de gens") is N HTTP round-trips to MainStreet — the real
+// scaling bottleneck once storage is bounded. A verdict is conservation-based (settled on-chain
+// transfers), so it changes SLOWLY; reusing it for ~60s is safe and cuts oracle load + p50 latency.
+// Caching a REFUSAL is doubly useful: a spammer's bad address is refused from cache, absorbing their
+// burst instead of hammering the oracle. Only SUCCESSFUL verdicts are cached — a throw/hang must fall
+// through to the relay's own outage handling (probation/fail-closed), never get pinned. Injected
+// preflights (tests, custom operators) bypass this entirely.
+const _pfCache = new Map();                                   // addr(lower) -> { at, val }
+const PF_TTL = Number(process.env.LAWBOR_PREFLIGHT_TTL_MS) || 60_000;   // 0 disables the cache
+const PF_MAX = 5000;                                          // bounded: FIFO-evict the oldest entry
+
 async function mainstreetPreflight(addr) {
+  const key = String(addr || '').toLowerCase();
+  if (PF_TTL > 0) {
+    const hit = _pfCache.get(key);
+    if (hit && (Date.now() - hit.at) < PF_TTL) return hit.val;
+  }
   // ?viewer=self asks the oracle for its viewer-relative conservation block too
   // (what THIS node's operator has provably settled with `addr`, per MainStreet's
   // own x402 settlement index). Additive on the oracle side: decision/score are
@@ -97,8 +114,13 @@ async function mainstreetPreflight(addr) {
   // that catch. AbortSignal turns the hang into a throw, restoring the relay's own outage handling.
   const ms = Number(process.env.LAWBOR_PREFLIGHT_TIMEOUT_MS) || 6000;
   const r = await fetch(MAINSTREET_URL + '/api/agent/preflight/' + encodeURIComponent(addr) + viewer, { headers: { 'x-ms-monitor': '1' }, signal: AbortSignal.timeout(ms) });
-  if (!r.ok) throw new Error('preflight HTTP ' + r.status);
-  return r.json();
+  if (!r.ok) throw new Error('preflight HTTP ' + r.status);   // NOT cached — a failure must reach the relay's outage handling
+  const val = await r.json();
+  if (PF_TTL > 0) {
+    _pfCache.set(key, { at: Date.now(), val });
+    if (_pfCache.size > PF_MAX) _pfCache.delete(_pfCache.keys().next().value);   // evict oldest (insertion order)
+  }
+  return val;
 }
 
 /**
@@ -1057,7 +1079,7 @@ function build(deps = {}) {
   return { server, node, mesh, startHeartbeat, stopHeartbeat, resolveFacts, foldOpts };
 }
 
-module.exports = { build };
+module.exports = { build, mainstreetPreflight, _resetPreflightCache: () => _pfCache.clear() };
 if (require.main === module) {
   // ship the built-in free apps by default on a standalone node: the org-graph viewer, a node digest,
   // and a stateless two-agent game (proof that you ship on it — see PLATFORM.md).
