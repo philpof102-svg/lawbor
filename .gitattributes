@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings — they run under WSL/linux bash (e.g.
+# `wsl bash tools/publish-gitlawb.sh`), and a CRLF checkout breaks bash with
+# `\r`-suffixed command errors. Force LF regardless of core.autocrlf.
+*.sh text eol=lf
