@@ -67,6 +67,40 @@ t('a control write (block) INVALIDATES the memo too — the blocked filter can c
   assert.notEqual(store.mutations(), before, 'the control write advanced the counter, so the next keyed read misses');
 });
 
+t('compaction is THREAD-ATOMIC — it never orphans a reply from its opening message', () => {
+  // A public trial hub is bounded by maxMessages. The danger: slice(newest N) can cut a still-live
+  // thread in half, and the fold then silently drops the whole negotiation (a bid whose help_wanted
+  // was compacted away is ignored). Here we overflow a small cap with many threads and assert that
+  // every thread the store kept is kept WHOLE — its seed (earliest message) is always present.
+  const d2 = fs.mkdtempSync(path.join(os.tmpdir(), 'lawbor-compact-'));
+  const s2 = createStore(path.join(d2, 's.jsonl'), undefined, { maxMessages: 6, compactEvery: 0 });
+  let n = 0;
+  const put = (thread, from, to, work) =>
+    s2.record({ id: '0x' + (++n).toString(16).padStart(6, '0'), thread, from, to, body: work, ts: n },
+              { origin: 'bot', dir: from === A ? 'out' : 'in' });
+  // 4 negotiations of 3 messages each = 12 live messages, cap is 6 → compaction must drop whole threads.
+  for (let j = 1; j <= 4; j++) {
+    const jid = 'j' + j, th = 't' + j;
+    put(th, A, B, buildWork('help_wanted', { jobId: jid, task: 'x' }));   // the SEED
+    put(th, B, A, buildWork('bid', { jobId: jid, price: '5' }));
+    put(th, A, B, buildWork('award', { jobId: jid, worker: B, price: '5' }));
+  }
+  s2.compact();
+  const kept = s2.all();
+  assert.ok(kept.length <= 6 + 3, 'cap respected within one whole-thread of slack');
+  // group what survived by thread; every surviving thread must still carry its help_wanted seed
+  const byThread = new Map();
+  for (const m of kept) { const k = m.thread; (byThread.get(k) || byThread.set(k, []).get(k)).push(m); }
+  for (const [th, msgs] of byThread) {
+    const folded = foldThread(msgs, {});
+    assert.ok(folded.size >= 1, `thread ${th} survived WHOLE — its seed folded a job, not orphans`);
+  }
+  // and the fold over the whole store has zero orphaned negotiations (every kept work msg maps to a job)
+  const all = foldThread(kept, {});
+  assert.ok(all.size >= 1 && all.size <= 4, 'kept a whole number of intact jobs');
+  try { fs.rmSync(d2, { recursive: true, force: true }); } catch {}
+});
+
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 console.log(`\n${pass} passed · ${fail} failed`);
 process.exit(fail ? 1 : 0);
