@@ -668,5 +668,80 @@ t('a STRANDED bid (blocked job) is collected only PAST the TTL, and only when th
   assert.equal(staleBidIds(m, { now: 9e12, bidTtlMs: 0 }).length, 0, 'bidTtlMs:0 disables the stranded class entirely');
 });
 
+// ---- quote: structured price negotiation, agreedPrice DERIVED (never a payment) -----------------
+console.log('\nLAWBOR work — quote (structured haggle; agreedPrice derived, confers nothing):');
+
+t('two matching live quotes (owner + counterparty) derive agreedPrice', () => {
+  const j = job([
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' })),
+    row(REQ, W1, buildWork('quote', { jobId: 'j1', amountMicro: '5000000' })),   // the OWNER quotes
+    row(W1, REQ, buildWork('quote', { jobId: 'j1', amountMicro: '5000000' })),   // counterparty matches
+  ]);
+  assert.ok(j.agreedPrice, 'agreedPrice set when both sides match');
+  assert.equal(j.agreedPrice.amountMicro, '5000000');
+  assert.equal(j.agreedPrice.with, W1.toLowerCase());
+  assert.equal(j.quotes.length, 2);
+});
+
+t('haggle then converge: a re-quote REPLACES (one live quote per party) and lands the deal', () => {
+  const j = job([
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' })),
+    row(REQ, W1, buildWork('quote', { jobId: 'j1', amountMicro: '5000000' })),
+    row(W1, REQ, buildWork('quote', { jobId: 'j1', amountMicro: '4000000' })),   // counter
+    row(W1, REQ, buildWork('quote', { jobId: 'j1', amountMicro: '5000000' })),   // W1 re-quotes to match
+  ]);
+  assert.equal(j.quotes.length, 2, 'the re-quote replaced, it did not accumulate');
+  assert.ok(j.agreedPrice && j.agreedPrice.amountMicro === '5000000', 'they converged');
+});
+
+t('the OWNER must agree too — only the counterparty quoting is not a deal', () => {
+  const j = job([
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' })),
+    row(W1, REQ, buildWork('quote', { jobId: 'j1', amountMicro: '5000000' })),
+  ]);
+  assert.equal(j.agreedPrice, null);
+});
+
+t('a quote is NEGOTIATION only — agreement is not payment, zero settlement edges', () => {
+  const m = [
+    row(REQ, W1, buildWork('offer', { jobId: 'o1', item: 'x' })),
+    row(W1, REQ, buildWork('quote', { jobId: 'o1', amountMicro: '5000000' })),
+    row(REQ, W1, buildWork('quote', { jobId: 'o1', amountMicro: '5000000' })),
+  ];
+  assert.equal(settlementsFrom(m).length, 0, 'a struck price moves no money and confers no standing');
+});
+
+t('bazaar haggle on an OFFER converges (seller + buyer)', () => {
+  const j = job([
+    row(REQ, W1, buildWork('offer', { jobId: 'o1', item: 'an MCP tool', price: '5 USDC hint' })),
+    row(W1, REQ, buildWork('quote', { jobId: 'o1', amountMicro: '4500000' })),   // buyer offers 4.5
+    row(REQ, W1, buildWork('quote', { jobId: 'o1', amountMicro: '4500000' })),   // seller accepts 4.5
+  ], 'o1');
+  assert.ok(j.agreedPrice && j.agreedPrice.amountMicro === '4500000');
+});
+
+t('order-independence: agreedPrice is the same whatever the fold order', () => {
+  const msgs = [
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' })),
+    row(REQ, W1, buildWork('quote', { jobId: 'j1', amountMicro: '7000000' })),
+    row(W1, REQ, buildWork('quote', { jobId: 'j1', amountMicro: '7000000' })),
+  ];
+  const a = foldThread(msgs).get('j1').agreedPrice;
+  const b = foldThread([msgs[2], msgs[0], msgs[1]]).get('j1').agreedPrice;
+  assert.deepEqual(a && a.amountMicro, b && b.amountMicro);
+  assert.deepEqual(a && a.with, b && b.with);
+});
+
+t('buildWork validates amountMicro; mayApply gates quote on negotiable state', () => {
+  assert.throws(() => buildWork('quote', { jobId: 'j1' }), /amountMicro/);
+  assert.throws(() => buildWork('quote', { jobId: 'j1', amountMicro: '0' }), /amountMicro/);
+  assert.throws(() => buildWork('quote', { jobId: 'j1', amountMicro: 'abc' }), /amountMicro/);
+  const open = foldThread([row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' }))]).get('j1');
+  assert.equal(mayApply(open, 'quote', W1).ok, true, 'allowed while open');
+  assert.equal(mayApply(open, 'quote', REQ).ok, true, 'the owner may quote too (no self-restriction)');
+  const cancelled = foldThread([row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' })), row(REQ, W1, buildWork('cancel', { jobId: 'j1' }))]).get('j1');
+  assert.equal(mayApply(cancelled, 'quote', W1).ok, false, 'refused once no longer negotiable');
+});
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exitCode = fail ? 1 : 0;

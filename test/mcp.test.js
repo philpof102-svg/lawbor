@@ -24,13 +24,13 @@ const payload = (r) => JSON.parse(r.result.content[0].text);
 (async () => {
   console.log('LAWBOR MCP — the gitlawb/openclaude tool surface:');
 
-  await t('initialize + tools/list expose the 22 lawbor tools on protocol ' + PROTOCOL, async () => {
+  await t('initialize + tools/list expose the 23 lawbor tools on protocol ' + PROTOCOL, async () => {
     const init = await dispatch({ jsonrpc: '2.0', id: 1, method: 'initialize' }, { node });
     assert.equal(init.result.protocolVersion, PROTOCOL); assert.equal(init.result.serverInfo.name, 'lawbor');
     const list = await dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, { node });
-    assert.equal(list.result.tools.length, 22);
+    assert.equal(list.result.tools.length, 23);
     assert.equal(list.result.tools.map((x) => x.name).sort().join(),
-      'lawbor_accept,lawbor_award,lawbor_bazaar,lawbor_bid,lawbor_block,lawbor_bot_say,lawbor_credit,lawbor_graph,lawbor_inbox,lawbor_jobs,lawbor_offer,lawbor_post_job,lawbor_requests,lawbor_say,lawbor_settle,lawbor_thread,lawbor_unblock,lawbor_validate,lawbor_vet,lawbor_wanted,lawbor_watch,lawbor_whoami');
+      'lawbor_accept,lawbor_award,lawbor_bazaar,lawbor_bid,lawbor_block,lawbor_bot_say,lawbor_credit,lawbor_graph,lawbor_inbox,lawbor_jobs,lawbor_offer,lawbor_post_job,lawbor_quote,lawbor_requests,lawbor_say,lawbor_settle,lawbor_thread,lawbor_unblock,lawbor_validate,lawbor_vet,lawbor_wanted,lawbor_watch,lawbor_whoami');
   });
 
   await t('lawbor_vet: two lenses side by side, LABELED — oracle word is never merged into local proof', async () => {

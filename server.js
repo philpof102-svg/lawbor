@@ -767,7 +767,17 @@ function build(deps = {}) {
           const unsent = work.unsentDepsTo(wMsgs, a.dependsOn, node.self, a.to);
           if (unsent.length) warnings.push('dependsOn ' + unsent.join(', ') + ' not in the outbound log to this peer — they never received those upstreams, so they will fold this job blockedByUnknown forever. Send them too, or this is a retention case.');
         }
-        return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, forwarded: r.forwarded, delivered: r.delivered, targets: r.targets || [], sign: r.sign, reason: r.reason || null, ...(warnings.length ? { warnings } : {}), ...(settled ? { settled } : {}), ...(validated ? { validated } : {}) });
+        // Negotiation feedback: after a quote, report whether the two sides now AGREE; after a settle,
+        // WARN (never block) if the paid amount differs from the price they converged on.
+        let agreedPrice = undefined;
+        if (a.kind === 'quote' || a.kind === 'settle') {
+          const jq = work.foldThread(store.all(), foldOpts).get(a.jobId);
+          if (a.kind === 'quote') agreedPrice = (jq && jq.agreedPrice) || null;
+          if (a.kind === 'settle' && jq && jq.agreedPrice && String(jq.agreedPrice.amountMicro) !== String(a.amountMicro)) {
+            warnings.push('settle amountMicro ' + a.amountMicro + ' ≠ agreedPrice ' + jq.agreedPrice.amountMicro + ' — advisory only, the settle is not blocked.');
+          }
+        }
+        return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, forwarded: r.forwarded, delivered: r.delivered, targets: r.targets || [], sign: r.sign, reason: r.reason || null, ...(warnings.length ? { warnings } : {}), ...(settled ? { settled } : {}), ...(validated ? { validated } : {}), ...(agreedPrice !== undefined ? { agreedPrice } : {}) });
       }
 
       /* THE WANTED BOARD — the open, claimable frontier, each poster annotated with OUR OWN verified
