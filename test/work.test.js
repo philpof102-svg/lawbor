@@ -3,7 +3,7 @@
 // tests are just "given these messages in this order, what is the job?".
 // Run: node test/work.test.js
 const assert = require('node:assert');
-const { buildWork, parseWork, foldThread, jobsFrom, graphOf, mayApply, unseenDeps } = require('../lib/work');
+const { buildWork, parseWork, foldThread, jobsFrom, graphOf, mayApply, unsentDepsTo } = require('../lib/work');
 
 let pass = 0, fail = 0;
 const t = (n, fn) => { try { fn(); pass++; console.log('  ✓ ' + n); } catch (e) { fail++; console.log('  ✗ ' + n + '\n      ' + (e && e.message)); } };
@@ -511,14 +511,27 @@ t('buildWork rejects a malformed txHash and a non-integer amount', () => {
     assert.match(may.reason, /dependencies are unmet/);
   });
 
-  // C3's emitter-side warning (surfaced by both write doors via this shared helper): the deps this node
-  // has never seen, so posting a job that depends on them is flagged as a retention case, not hidden.
-  t('unseenDeps names only upstreams this node has NOT folded', () => {
-    const msgs = [{ id: '1', from: RA, to: RB, rxAt: 10, body: hw('build') }];
-    assert.deepEqual(unseenDeps(msgs, ['verify']), ['verify'], 'never seen → warned');
-    assert.deepEqual(unseenDeps(msgs, ['build']), [], 'known → no warning');
-    assert.deepEqual(unseenDeps(msgs, ['build', 'ship']), ['ship'], 'only the unseen ones');
-    assert.deepEqual(unseenDeps(msgs, undefined), [], 'no deps → nothing to warn');
+  /* C3's emitter-side warning, SCOPED PER PEER. The question is not "do I know this upstream" but "did I
+   * send it to the party I'm now telling to depend on it" — because the recipient folds blockedByUnknown
+   * on what THEY received, not on what I happen to know. The degenerate topology below is the exact one
+   * C3 reproduced and the one a global-fold check silently misses. */
+  t('unsentDepsTo warns per-peer: sent to THIS peer → silent, not sent to them → warned', () => {
+    const me = RA;
+    // I sent `build` to RB and `verify` to RC (two different peers).
+    const out = [
+      { id: '1', from: me, to: RB, rxAt: 10, body: hw('build') },
+      { id: '2', from: me, to: RC, rxAt: 20, body: hw('verify') },
+    ];
+    // posting deploy(dependsOn:build) TO RB → I sent build to RB → no warning
+    assert.deepEqual(unsentDepsTo(out, ['build'], me, RB), [], 'upstream was sent to this very peer');
+    // THE C3 CASE: posting deploy(dependsOn:verify) TO RB → I sent verify to RC, NOT RB → warn.
+    // A global "do I know verify" check says no (I do know it), and would wrongly stay silent.
+    assert.deepEqual(unsentDepsTo(out, ['verify'], me, RB), ['verify'], 'known globally, but never sent to THIS peer');
+    assert.deepEqual(unsentDepsTo(out, ['build', 'verify'], me, RB), ['verify'], 'only the one not sent here');
+    assert.deepEqual(unsentDepsTo(out, undefined, me, RB), [], 'no deps → nothing to warn');
+    // a bid I received (from someone else) is not an outbound help_wanted and must not count as "sent"
+    const noisy = [...out, { id: '3', from: RC, to: me, rxAt: 30, body: buildWork('bid', { jobId: 'ship', price: '1' }) }];
+    assert.deepEqual(unsentDepsTo(noisy, ['ship'], me, RB), ['ship'], 'only MY outbound help_wanted to THIS peer counts');
   });
 }
 
