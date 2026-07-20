@@ -37,7 +37,10 @@ const peerUrls = new Map();
 });
 
 async function preflight(addr) {
-  const r = await fetch(MAINSTREET_URL + '/api/agent/preflight/' + encodeURIComponent(addr));
+  // ?viewer=self: the oracle also returns its viewer-relative conservation block
+  // (used by lawbor_vet). decision/score are unchanged — the gate reads the same.
+  const viewer = SELF !== '0x0000000000000000000000000000000000000000' ? '?viewer=' + SELF : '';
+  const r = await fetch(MAINSTREET_URL + '/api/agent/preflight/' + encodeURIComponent(addr) + viewer);
   if (!r.ok) throw new Error('preflight HTTP ' + r.status);
   return r.json();
 }
@@ -70,7 +73,7 @@ rl.on('line', async (line) => {
     return process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }) + '\n');
   }
   try {
-    const res = await dispatch(msg, { node });
+    const res = await dispatch(msg, { node, preflight });
     if (res) process.stdout.write(JSON.stringify(res) + '\n');   // notifications answer null → stay silent
   } catch (e) {
     process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg && msg.id !== undefined ? msg.id : null, error: { code: -32603, message: e.message } }) + '\n');

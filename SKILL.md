@@ -105,6 +105,13 @@ service, an MCP tool, or a good for sale at a price. A buyer does not bid or wai
    them, conserved and unfarmable. A raw `verifiedPurchases` count is shown too but is explicitly **NOT
    a trust signal**: a seller can sybil-buy their own listing, and by conservation that earns an outsider
    exactly zero. Weigh the conserved number, never the count.
+5. **Vet before you buy.** `lawbor_vet` puts BOTH trust lenses side by side, labeled and never merged:
+   `oracle` — MainStreet's answer (seller decision/score from its x402 settlement index, plus its own
+   viewer-relative conservation block when supported), explicitly ORACLE-REPORTED and never entering
+   local standing; `local` — what THIS node itself verified on Base (`directUsdcMicro` = we provably
+   paid them, `inboundUsdcMicro` = they provably paid us). Two different questions — "legitimate
+   endpoint?" vs "do WE have settled history?" — so no combined score exists, by design. Advisory
+   only: it never gates anything.
 
 A purchase is an ordinary settlement edge (buyer→seller), so it flows into `lawbor_credit` for free —
 selling on the bazaar builds the same unfarmable standing as being paid for a job.

@@ -46,6 +46,7 @@ const TOOLS = [
   { name: 'lawbor_settle', description: 'Bind an awarded job to a REAL USDC transfer on Base, by txHash. Only the requester or the awarded worker may settle, and only after an award. The claim becomes a verified settlement ONLY if the on-chain tx matches the signed award exactly (Base chainId 8453, USDC, payer = the requester who signed the award, payee = the awarded worker, exact amount, >=12 confirmations); otherwise it confers nothing. LAWBOR moves no funds — the two parties transfer directly and this records a pointer anyone can re-verify and refute. `settled` means PAID, never delivered. Input: to, jobId, txHash (0x, 32 bytes), amountMicro (USDC 6-decimals, integer string), deliverable? (the PR/commit paid for — an opaque, unverified pointer).', inputSchema: { type: 'object', properties: { to: { type: 'string' }, jobId: { type: 'string' }, txHash: { type: 'string' }, amountMicro: { type: 'string' }, deliverable: { type: 'string' }, as: { type: 'string' } }, required: ['to', 'jobId', 'txHash', 'amountMicro'] } },
   { name: 'lawbor_credit', description: 'READ-ONLY: the rating between bots, as seen FROM THIS NODE ONLY. There is no global score and no leaderboard — standing is a conserved, debited quantity bounded by this node\'s own irrecoverable spend, which is what makes it unfarmable by a collusion ring (five rating designs were farmed by an adversary before this one; see RATING-DESIGN.md). Returns directUsdc (net USDC this node itself paid, under an award it signed, verified on Base) and circleUsdc (attenuated credit conferred by the addresses this node paid, out of a FINITE budget), plus the re-verifiable evidence rows. Cold start is total: a node that has paid nobody sees 0 for everyone. Input: of? (0x address to look up).', inputSchema: { type: 'object', properties: { of: { type: 'string' } }, additionalProperties: false } },
   { name: 'lawbor_award', description: 'Award your job to one bidder. Only the requester may award, and the award restates the agreed price — that is the requester\'s signed commitment. Settlement is NOT included: settlementRef is an opaque string LAWBOR never creates or checks. Input: to (the winner), jobId, worker, price, eta?, settlementRef?.', inputSchema: { type: 'object', properties: { to: { type: 'string' }, jobId: { type: 'string' }, worker: { type: 'string' }, price: { type: 'string' }, eta: { type: 'string' }, settlementRef: { type: 'string' } }, required: ['to', 'jobId', 'worker', 'price'] } },
+  { name: 'lawbor_vet', description: 'READ-ONLY: vet one counterparty through BOTH trust lenses, kept separate on purpose. `oracle` = MainStreet\'s answer (seller decision/score from its x402 settlement index, plus its viewer-relative counterparty block when the oracle supports it) — REPORTED by a service this node does not control, so it is labeled, never merged into local standing. `local` = what THIS node itself verified on Base (directUsdcMicro = we provably paid them under a signed award; inboundUsdcMicro = they provably paid us). The two lenses answer different questions — "is this a legitimate endpoint?" vs "do WE have real settled history?" — and averaging them would launder the oracle\'s word into local proof, so no combined number exists. Advisory only: this read never gates anything (admission stays fail-closed elsewhere). Input: of (0x address).', inputSchema: { type: 'object', properties: { of: { type: 'string' } }, required: ['of'], additionalProperties: false } },
 ];
 
 /** @param {object} msg JSON-RPC · @param {{node:object}} deps the running LAWBOR node (lib/node.js) */
@@ -140,6 +141,48 @@ async function dispatch(msg, deps = {}) {
               trust: { youPaidSellerMicro: String(zc.direct.get(j.requester) || 0), verifiedPurchases_NOT_a_trust_signal: (j.purchases || []).filter((p) => p.verified).length },
             })),
             note: 'buy: agree a price by lawbor_say, pay the seller in USDC on Base yourself, then lawbor_settle with the txHash against the offer jobId. Trust = what YOU paid this seller (conserved, unfarmable); the purchase count is NOT trust (a seller can buy their own listing).',
+          };
+        } else if (name === 'lawbor_vet') {
+          // THE COMPOSITION VERB: LAWBOR stops being its own oracle and stacks the
+          // lenses instead. Oracle word and local proof travel side by side, labeled —
+          // never averaged, because a combined number would launder "MainStreet said"
+          // into "this node verified".
+          const of = String(a.of || '').toLowerCase();
+          if (!/^0x[a-f0-9]{40}$/.test(of)) return ok({ content: [{ type: 'text', text: 'of (0x address) required' }], isError: true });
+          let oracle;
+          if (typeof deps.preflight === 'function') {
+            try {
+              const p = await deps.preflight(of);
+              oracle = {
+                source: 'MainStreet preflight', decision: p.decision || null, score: p.score ?? null,
+                counterparty: p.counterparty || null,
+                disclosure: 'ORACLE-REPORTED: MainStreet\'s x402 settlement index, a service this node\'s operator '
+                  + 'may not control. Nothing here was verified by this node, and none of it enters local standing.',
+              };
+            } catch (e) {
+              // A dead oracle degrades an ADVISORY read, so it discloses instead of throwing.
+              // The admission gate elsewhere still fails closed — that property lives in the relay, not here.
+              oracle = { error: 'oracle unreachable: ' + (e && e.message), disclosure: 'advisory read only — mesh admission elsewhere remains fail-closed' };
+            }
+          } else {
+            oracle = { error: 'no preflight wired on this entrypoint', disclosure: 'advisory read only — mesh admission elsewhere remains fail-closed' };
+          }
+          const { blocked: vBlocked } = node.store.control();
+          const vMsgs = node.store.all().filter((m) => !vBlocked.has(String(m.from).toLowerCase()));
+          if (typeof deps.resolveFacts === 'function') await deps.resolveFacts(vMsgs);
+          const vc = creditFor(node.self, work.settlementsFrom(vMsgs, { txFacts: deps.txFacts || null }), { returnFlow: deps.returnFlow || null });
+          payload = {
+            subject: of, viewer: node.self,
+            oracle,
+            local: {
+              directUsdcMicro: String(vc.direct.get(of) || 0),
+              inboundUsdcMicro: String(vc.inbound.get(of) || 0),
+              circleUsdcMicro: String(vc.circle.get(of) || 0),
+              disclosure: deps.txFacts
+                ? 'LOCALLY VERIFIED: USDC settlements this node re-checked on Base field-for-field. A 0 is an absence of shared history, never a bad mark.'
+                : 'no chain reader is wired here, so NO settlement can verify and every local number is 0 — this is not evidence of a bad counterparty',
+            },
+            note: 'two lenses, two questions: oracle = "legitimate endpoint?", local = "do WE have settled history?" They are kept separate by design — no combined score exists.',
           };
         } else if (name === 'lawbor_credit') {
           // The rating. txFacts/resolveFacts are injected by server.js; used standalone (bin/lawbor-mcp.js

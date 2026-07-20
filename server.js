@@ -85,7 +85,12 @@ function parseAnchors(spec) {
 }
 
 async function mainstreetPreflight(addr) {
-  const r = await fetch(MAINSTREET_URL + '/api/agent/preflight/' + encodeURIComponent(addr), { headers: { 'x-ms-monitor': '1' } });
+  // ?viewer=self asks the oracle for its viewer-relative conservation block too
+  // (what THIS node's operator has provably settled with `addr`, per MainStreet's
+  // own x402 settlement index). Additive on the oracle side: decision/score are
+  // unchanged, so the admission gate reads exactly what it always read.
+  const viewer = SELF !== '0x0000000000000000000000000000000000000000' ? '?viewer=' + SELF : '';
+  const r = await fetch(MAINSTREET_URL + '/api/agent/preflight/' + encodeURIComponent(addr) + viewer, { headers: { 'x-ms-monitor': '1' } });
   if (!r.ok) throw new Error('preflight HTTP ' + r.status);
   return r.json();
 }
@@ -911,7 +916,7 @@ function build(deps = {}) {
          * a local operator is unaffected and the internet gets a read-only surface — which is exactly
          * what this deployment claims to be. Default-deny: a tool not on the read list is a write. */
         const READ_TOOLS = new Set(['lawbor_whoami', 'lawbor_inbox', 'lawbor_watch', 'lawbor_thread',
-          'lawbor_requests', 'lawbor_jobs', 'lawbor_graph', 'lawbor_wanted', 'lawbor_credit', 'lawbor_bazaar']);
+          'lawbor_requests', 'lawbor_jobs', 'lawbor_graph', 'lawbor_wanted', 'lawbor_credit', 'lawbor_bazaar', 'lawbor_vet']);
         if (msg && msg.method === 'tools/call' && !READ_TOOLS.has(((msg.params || {}).name) || '')) {
           if (!(await operatorOk(req))) {
             return json(res, 200, { jsonrpc: '2.0', id: msg.id === undefined ? null : msg.id,
@@ -923,6 +928,7 @@ function build(deps = {}) {
           }
         }
         const out = await mcpDispatch(msg, { node, apps, txFacts, resolveFacts, returnFlow: deps.returnFlow || null,
+          preflight: deps.preflight || mainstreetPreflight,
           requireProofAbove, provenAddrs: () => work.provenFrom(store.all(), foldOpts) });
         return out ? json(res, 200, out) : res.writeHead(204, CORS) || res.end();   // notification → 204
       }

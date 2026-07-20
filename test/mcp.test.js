@@ -24,13 +24,43 @@ const payload = (r) => JSON.parse(r.result.content[0].text);
 (async () => {
   console.log('LAWBOR MCP — the gitlawb/openclaude tool surface:');
 
-  await t('initialize + tools/list expose the 21 lawbor tools on protocol ' + PROTOCOL, async () => {
+  await t('initialize + tools/list expose the 22 lawbor tools on protocol ' + PROTOCOL, async () => {
     const init = await dispatch({ jsonrpc: '2.0', id: 1, method: 'initialize' }, { node });
     assert.equal(init.result.protocolVersion, PROTOCOL); assert.equal(init.result.serverInfo.name, 'lawbor');
     const list = await dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, { node });
-    assert.equal(list.result.tools.length, 21);
+    assert.equal(list.result.tools.length, 22);
     assert.equal(list.result.tools.map((x) => x.name).sort().join(),
-      'lawbor_accept,lawbor_award,lawbor_bazaar,lawbor_bid,lawbor_block,lawbor_bot_say,lawbor_credit,lawbor_graph,lawbor_inbox,lawbor_jobs,lawbor_offer,lawbor_post_job,lawbor_requests,lawbor_say,lawbor_settle,lawbor_thread,lawbor_unblock,lawbor_validate,lawbor_wanted,lawbor_watch,lawbor_whoami');
+      'lawbor_accept,lawbor_award,lawbor_bazaar,lawbor_bid,lawbor_block,lawbor_bot_say,lawbor_credit,lawbor_graph,lawbor_inbox,lawbor_jobs,lawbor_offer,lawbor_post_job,lawbor_requests,lawbor_say,lawbor_settle,lawbor_thread,lawbor_unblock,lawbor_validate,lawbor_vet,lawbor_wanted,lawbor_watch,lawbor_whoami');
+  });
+
+  await t('lawbor_vet: two lenses side by side, LABELED — oracle word is never merged into local proof', async () => {
+    /* The composition verb. The oracle lens must carry its own disclosure (REPORTED, not verified),
+     * the local lens must carry its own (or the no-chain-reader honesty), and no combined number may
+     * exist — averaging them would launder "MainStreet said" into "this node verified". */
+    const p = payload(await dispatch({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'lawbor_vet', arguments: { of: B } } },
+      { node, preflight: async () => ({ decision: 'PROCEED', score: 71, counterparty: { settlements: 3, youPaidThemMicro: '5000000' } }) }));
+    assert.equal(p.subject, B.toLowerCase());
+    assert.equal(p.oracle.decision, 'PROCEED');
+    assert.equal(p.oracle.counterparty.youPaidThemMicro, '5000000', 'oracle conservation block passes through');
+    assert.match(p.oracle.disclosure, /ORACLE-REPORTED/);
+    assert.match(p.oracle.disclosure, /none of it enters local standing/);
+    assert.equal(p.local.directUsdcMicro, '0', 'local lens stays what THIS node verified — the oracle number never leaks in');
+    assert.match(p.local.disclosure, /no chain reader is wired/, 'standalone: local 0 is explained, not left to be misread');
+    assert.match(p.note, /no combined score exists/);
+    for (const k of Object.keys(p)) assert.ok(!/^(combined|merged|total|overall)/i.test(k), 'no merged-score field may exist: ' + k);
+  });
+
+  await t('lawbor_vet: a dead oracle DISCLOSES on this advisory read instead of failing the call', async () => {
+    const p = payload(await dispatch({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'lawbor_vet', arguments: { of: B } } },
+      { node, preflight: async () => { throw new Error('ECONNREFUSED'); } }));
+    assert.match(p.oracle.error, /oracle unreachable/);
+    assert.match(p.oracle.disclosure, /fail-closed/, 'must say where fail-closed still holds (the relay), so honesty here cannot be read as softness there');
+    assert.equal(p.local.directUsdcMicro, '0', 'local lens still answers');
+    const bad = await dispatch({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'lawbor_vet', arguments: {} } }, { node });
+    assert.equal(bad.result.isError, true, 'missing of → honest tool error');
   });
 
   await t('lawbor_credit refuses to let 0 read as "bad counterparty" when nothing can verify', async () => {
