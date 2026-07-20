@@ -743,5 +743,49 @@ t('buildWork validates amountMicro; mayApply gates quote on negotiable state', (
   assert.equal(mayApply(cancelled, 'quote', W1).ok, false, 'refused once no longer negotiable');
 });
 
+// ---- confirm: the owner LOCKS the agreed price (offer-side award), still moves no money ------------
+console.log('\nLAWBOR work — confirm (owner locks agreedPrice; advisory, confers nothing):');
+
+t('the owner confirming the agreed amount sets agreedPrice.accepted; a mismatched confirm does not', () => {
+  const base = [
+    row(REQ, W1, buildWork('offer', { jobId: 'o1', item: 'x' })),
+    row(REQ, W1, buildWork('quote', { jobId: 'o1', amountMicro: '5000000' })),   // owner agrees 5
+    row(W1, REQ, buildWork('quote', { jobId: 'o1', amountMicro: '5000000' })),   // buyer matches 5
+  ];
+  let j = job([...base], 'o1');
+  assert.ok(j.agreedPrice && j.agreedPrice.accepted === false, 'agreed but not yet locked');
+  j = job([...base, row(REQ, W1, buildWork('confirm', { jobId: 'o1', amountMicro: '5000000' }))], 'o1');
+  assert.equal(j.agreedPrice.accepted, true, 'owner confirmed the agreed number → locked');
+  // a confirm for a DIFFERENT number does not lock the current deal
+  j = job([...base, row(REQ, W1, buildWork('confirm', { jobId: 'o1', amountMicro: '4000000' }))], 'o1');
+  assert.equal(j.agreedPrice.accepted, false, 'a confirm of a different amount does not lock the agreed price');
+});
+
+t('re-quoting to a new price UN-locks it (accepted binds to the number, order-independent)', () => {
+  const j = job([
+    row(REQ, W1, buildWork('offer', { jobId: 'o1', item: 'x' })),
+    row(REQ, W1, buildWork('quote', { jobId: 'o1', amountMicro: '5000000' })),
+    row(W1, REQ, buildWork('quote', { jobId: 'o1', amountMicro: '5000000' })),
+    row(REQ, W1, buildWork('confirm', { jobId: 'o1', amountMicro: '5000000' })),   // locked at 5
+    row(REQ, W1, buildWork('quote', { jobId: 'o1', amountMicro: '6000000' })),      // owner re-quotes 6
+    row(W1, REQ, buildWork('quote', { jobId: 'o1', amountMicro: '6000000' })),      // buyer matches 6
+  ], 'o1');
+  assert.equal(j.agreedPrice.amountMicro, '6000000', 'the deal moved to 6');
+  assert.equal(j.agreedPrice.accepted, false, 'the old confirm (5) no longer locks the new price (6)');
+});
+
+t('confirm gating: owner-only, and only when a price is actually on the table', () => {
+  const agreed = foldThread([
+    row(REQ, W1, buildWork('offer', { jobId: 'o1', item: 'x' })),
+    row(REQ, W1, buildWork('quote', { jobId: 'o1', amountMicro: '5000000' })),
+    row(W1, REQ, buildWork('quote', { jobId: 'o1', amountMicro: '5000000' })),
+  ]).get('o1');
+  assert.equal(mayApply(agreed, 'confirm', REQ).ok, true, 'owner may lock an agreed price');
+  assert.equal(mayApply(agreed, 'confirm', W1).ok, false, 'a non-owner may not lock');
+  const noDeal = foldThread([row(REQ, W1, buildWork('offer', { jobId: 'o2', item: 'x' }))]).get('o2');
+  assert.equal(mayApply(noDeal, 'confirm', REQ).ok, false, 'cannot lock a price nobody agreed to');
+  assert.throws(() => buildWork('confirm', { jobId: 'o1', amountMicro: '0' }), /amountMicro/);
+});
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exitCode = fail ? 1 : 0;

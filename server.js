@@ -780,11 +780,11 @@ function build(deps = {}) {
         // Negotiation feedback: after a quote, report whether the two sides now AGREE; after a settle,
         // WARN (never block) if the paid amount differs from the price they converged on.
         let agreedPrice = undefined;
-        if (a.kind === 'quote' || a.kind === 'settle') {
+        if (a.kind === 'quote' || a.kind === 'confirm' || a.kind === 'settle') {
           const jq = work.foldThread(store.all(), foldOpts).get(a.jobId);
-          if (a.kind === 'quote') agreedPrice = (jq && jq.agreedPrice) || null;
+          if (a.kind === 'quote' || a.kind === 'confirm') agreedPrice = (jq && jq.agreedPrice) || null;
           if (a.kind === 'settle' && jq && jq.agreedPrice && String(jq.agreedPrice.amountMicro) !== String(a.amountMicro)) {
-            warnings.push('settle amountMicro ' + a.amountMicro + ' ≠ agreedPrice ' + jq.agreedPrice.amountMicro + ' — advisory only, the settle is not blocked.');
+            warnings.push('settle amountMicro ' + a.amountMicro + ' ≠ ' + (jq.agreedPrice.accepted ? 'the LOCKED agreedPrice ' : 'agreedPrice ') + jq.agreedPrice.amountMicro + ' — advisory only, the settle is not blocked.');
           }
         }
         return json(res, 200, { id: r.envelope.id, thread: r.envelope.thread, forwarded: r.forwarded, delivered: r.delivered, targets: r.targets || [], sign: r.sign, reason: r.reason || null, ...(warnings.length ? { warnings } : {}), ...(settled ? { settled } : {}), ...(validated ? { validated } : {}), ...(agreedPrice !== undefined ? { agreedPrice } : {}) });
