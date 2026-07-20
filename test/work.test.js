@@ -535,5 +535,57 @@ t('buildWork rejects a malformed txHash and a non-integer amount', () => {
   });
 }
 
+/* THE BAZAAR — offers (supply). An offer is a standing listing bought by PAYING; the payment is the
+ * deal. It reuses the whole settlement + conservation engine, so a purchase is just an edge and a
+ * self-bought listing earns an outsider exactly nothing. */
+{
+  const { settlementsFrom: sFrom } = require('../lib/work');
+  const { creditFor } = require('../lib/credit');
+  const SELL = '0x' + 'a1'.repeat(20), BUY1 = '0x' + 'b1'.repeat(20), BUY2 = '0x' + 'c1'.repeat(20);
+  const TX = (n) => '0x' + String(n).padStart(64, '0');
+  const USDC = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
+  const fact = (from, to) => ({ chainId: 8453, token: USDC, from, to, valueMicro: '5000000', confirmations: 20, blockTime: 1 });
+  const off = () => [
+    row(SELL, BUY1, buildWork('offer', { jobId: 'mcp', item: 'get_intent tool', price: '5 USDC', ref: 'https://x' })),
+    row(BUY1, SELL, buildWork('settle', { jobId: 'mcp', txHash: TX(1), amountMicro: '5000000' })),
+    row(BUY2, SELL, buildWork('settle', { jobId: 'mcp', txHash: TX(2), amountMicro: '5000000' })),
+  ];
+  const facts = new Map([[TX(1), fact(BUY1, SELL)], [TX(2), fact(BUY2, SELL)]]);
+
+  t('an offer is a listing bought MANY times; each verified purchase becomes a buyer→seller edge', () => {
+    const j = foldThread(off(), { txFacts: facts }).get('mcp');
+    assert.equal(j.isOffer, true);
+    assert.equal(j.state, 'offered');
+    assert.equal(j.purchases.filter((p) => p.verified).length, 2, 'two distinct buyers, both verified');
+    const edges = sFrom(off(), { txFacts: facts });
+    assert.equal(edges.length, 2);
+    assert.ok(edges.every((e) => e.worker === SELL.toLowerCase()), 'seller is the payee on every edge');
+  });
+
+  t('a purchase confers the seller CONSERVED standing to the buyer, and ZERO to an outsider', () => {
+    const edges = sFrom(off(), { txFacts: facts });
+    assert.equal(Number(creditFor(BUY1, edges, {}).direct.get(SELL.toLowerCase())) / 1e6, 5, 'BUY1 paid the seller 5');
+    assert.equal(creditFor('0x' + '99'.repeat(20), edges, {}).direct.size, 0, 'a stranger sees no invented seller standing');
+  });
+
+  t('order-independent: a purchase folded before the offer is created still counts', () => {
+    const shuffled = [...off()].reverse();
+    assert.equal(foldThread(shuffled, { txFacts: facts }).get('mcp').purchases.filter((p) => p.verified).length, 2);
+  });
+
+  t('a seller cannot buy their own offer, and an unverified purchase confers nothing', () => {
+    assert.equal(mayApply({ isOffer: true, requester: SELL.toLowerCase() }, 'settle', SELL).ok, false, 'no self-buy');
+    // no chain fact injected → the purchase stays unverified → no edge → no standing
+    const noFacts = foldThread(off()).get('mcp');
+    assert.equal(noFacts.purchases.filter((p) => p.verified).length, 0);
+    assert.equal(sFrom(off()).length, 0, 'unverified purchases produce no rating edge');
+  });
+
+  t('buildWork refuses an offer with no item, and offer is a known kind', () => {
+    assert.ok(require('../lib/work').KINDS.includes('offer'));
+    assert.throws(() => buildWork('offer', { jobId: 'x' }), /item/);
+  });
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exitCode = fail ? 1 : 0;

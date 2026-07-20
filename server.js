@@ -739,6 +739,33 @@ function build(deps = {}) {
        * poster, the one question a worker can settle without trusting anyone is "has this requester
        * ever actually paid ME?" — so the board answers exactly that, and nothing more. No global score;
        * a 0 is labelled an absence, never a bad mark. Anyone — human or bot — may bid on any row. */
+      /* THE BAZAAR — the SUPPLY side. Offers listed for sale (a service / MCP tool / good), each shown
+       * with the SELLER's trust FROM THE VIEWER'S POINT OF VIEW: what this node has irrecoverably paid
+       * them, verified on Base and conserved (a ring buying its own listing earns an outsider nothing).
+       * A raw purchase count is included but explicitly flagged NOT a trust signal — the same discipline
+       * as /who and /wanted: a free-to-manufacture number never sits next to a verified one unlabelled. */
+      if (req.method === 'GET' && url === '/bazaar') {
+        const { blocked: zBlocked } = store.control();
+        const zMsgs = store.all().filter((m) => !zBlocked.has(String(m.from).toLowerCase()));
+        await resolveFacts(zMsgs);
+        const zc = creditFor(node.self, work.settlementsFrom(zMsgs, foldOpts), { returnFlow: deps.returnFlow || null });
+        const of = q.get('of') ? String(q.get('of')).toLowerCase() : null;
+        const offers = [...work.foldThread(zMsgs, foldOpts).values()]
+          .filter((j) => j.isOffer && (!of || j.requester === of))
+          .sort((a, b) => b.at - a.at)
+          .map((j) => ({
+            jobId: j.jobId, item: j.item, price: j.price, ref: j.ref, tags: j.tags, seller: j.requester, thread: j.thread,
+            trust: {
+              youPaidSellerMicro: String(zc.direct.get(j.requester) || 0),
+              verifiedPurchases: (j.purchases || []).filter((p) => p.verified).length,
+              note: 'youPaidSellerMicro is the trust number — conserved, unfarmable. verifiedPurchases is NOT a trust signal (a seller can sybil-buy their own listing; it earns an outsider nothing).',
+            },
+          }));
+        return json(res, 200, { viewer: node.self, offers,
+          howToBuy: 'agree a price by /say, pay the seller in USDC on Base yourself, then /work kind:settle with the txHash against the offer jobId. settled means PAID.',
+          limits: RATING_LIMITS });
+      }
+
       if (req.method === 'GET' && url === '/wanted') {
         const { blocked: wBlocked } = store.control();
         const wMsgs = store.all().filter((m) => !wBlocked.has(String(m.from).toLowerCase()));
@@ -884,7 +911,7 @@ function build(deps = {}) {
          * a local operator is unaffected and the internet gets a read-only surface — which is exactly
          * what this deployment claims to be. Default-deny: a tool not on the read list is a write. */
         const READ_TOOLS = new Set(['lawbor_whoami', 'lawbor_inbox', 'lawbor_watch', 'lawbor_thread',
-          'lawbor_requests', 'lawbor_jobs', 'lawbor_graph', 'lawbor_wanted', 'lawbor_credit']);
+          'lawbor_requests', 'lawbor_jobs', 'lawbor_graph', 'lawbor_wanted', 'lawbor_credit', 'lawbor_bazaar']);
         if (msg && msg.method === 'tools/call' && !READ_TOOLS.has(((msg.params || {}).name) || '')) {
           if (!(await operatorOk(req))) {
             return json(res, 200, { jsonrpc: '2.0', id: msg.id === undefined ? null : msg.id,
