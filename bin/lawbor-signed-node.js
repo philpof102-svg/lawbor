@@ -28,7 +28,9 @@ const http = require('node:http');
 
 const KEY = process.env.LAWBOR_SIGNER_KEY;
 const ROOT = path.join(__dirname, '..');
-const SIGNER_PORT = 8787;                          // loopback only; never bound to a public interface
+// loopback only; never bound to a public interface. Configurable so two nodes can co-locate on one box
+// (each needs its own signer port) — in production one node per host, so the default is fine.
+const SIGNER_PORT = Number(process.env.LAWBOR_SIGNER_PORT || 8787);
 
 /* The node's environment, derived from the parent's — a PURE function so the one invariant that matters
  * can be tested without spawning anything: the node MUST NEVER see the key. If this ever stops deleting
@@ -44,19 +46,35 @@ function nodeEnvFrom(parentEnv, token, port) {
 }
 
 function main() {
-  if (!KEY || !/^0x[0-9a-fA-F]{64}$/.test(KEY)) {
-    console.error('lawbor-signed-node: LAWBOR_SIGNER_KEY must be a 0x 32-byte throwaway key. Refusing to start.');
+  let key = KEY;
+  let ephemeral = false;
+  if (!key) {
+    /* EPHEMERAL IDENTITY — the answer to "you can't just have a conversation". With no key given, mint a
+     * throwaway one for THIS session: the node can then ORIGINATE and hold a real two-way exchange with
+     * zero key ceremony. The cost is honest and stated: no persistence, no reputation — a fresh address
+     * every boot. That is exactly right for CHAT, because standing is only ever about PAYMENT decisions
+     * (lib/credit.js), which is a separate concern. For the job market or anything that must accrue
+     * reputation across sessions, pass a persistent LAWBOR_SIGNER_KEY instead. The minted key lives ONLY
+     * in the endpoint child, same as a supplied one — the node still holds nothing. */
+    const { generatePrivateKey, privateKeyToAccount } = require('viem/accounts');
+    key = generatePrivateKey();
+    process.env.LAWBOR_ADDR = privateKeyToAccount(key).address;
+    ephemeral = true;
+    console.log('lawbor-signed-node: no key given → EPHEMERAL identity ' + process.env.LAWBOR_ADDR
+      + ' (fresh each boot, no reputation — fine for chat, NOT for the job market). Pass LAWBOR_SIGNER_KEY for a persistent one.');
+  } else if (!/^0x[0-9a-fA-F]{64}$/.test(key)) {
+    console.error('lawbor-signed-node: LAWBOR_SIGNER_KEY must be a 0x 32-byte key (or omit it for an ephemeral identity).');
     process.exit(1);
   }
   if (!process.env.LAWBOR_ADDR) {
-    console.error('lawbor-signed-node: set LAWBOR_ADDR to the address of that key (peers verify signer === from).');
+    console.error('lawbor-signed-node: with a supplied key, set LAWBOR_ADDR to its address (peers verify signer === from).');
     process.exit(1);
   }
   const TOKEN = crypto.randomBytes(24).toString('hex');   // per-boot secret, handed to the node directly
 
-  // 1. the endpoint child: it ALONE gets the key.
+  // 1. the endpoint child: it ALONE gets the key (supplied or ephemerally minted).
   const endpoint = spawn(process.execPath, [path.join(ROOT, 'examples', 'signer-endpoint.js')], {
-    env: { ...process.env, LAWBOR_SIGNER_PORT: String(SIGNER_PORT), LAWBOR_SIGNER_TOKEN: TOKEN, LAWBOR_SIGNER_ADDR: process.env.LAWBOR_ADDR },
+    env: { ...process.env, LAWBOR_SIGNER_KEY: key, LAWBOR_SIGNER_PORT: String(SIGNER_PORT), LAWBOR_SIGNER_TOKEN: TOKEN, LAWBOR_SIGNER_ADDR: process.env.LAWBOR_ADDR },
     stdio: 'inherit',
   });
   endpoint.on('exit', (code) => { console.error('lawbor-signed-node: signer endpoint exited (' + code + ') — bringing the node down too, a node that cannot sign must not pretend to run.'); process.exit(code || 1); });
