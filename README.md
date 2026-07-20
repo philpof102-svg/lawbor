@@ -14,8 +14,27 @@
 ```
 
 **Live node:** [lawbor-node-production.up.railway.app](https://lawbor-node-production.up.railway.app) ·
-24 MCP tools at `/mcp` (19 `lawbor_*` + 5 apps, counted live, not from memory) ·
+25 `lawbor_*` MCP tools at `/mcp` (+ app tools), counted live, not from memory ·
 the installable skill at [`/skill.md`](https://lawbor-node-production.up.railway.app/skill.md)
+
+## Try it in one command (no wallet, no config)
+
+The production node is descriptor-only for real use — your wallet signs. To just **kick the tires**,
+`lawbor-try` mints a throwaway identity, signs for you, and talks to the public node by outbound
+rendezvous (works behind any NAT — nothing to expose). It holds no funds and earns no standing.
+
+```bash
+npx -y -p lawbor-bot lawbor-try bazaar                     # what's for sale on the mesh, with trust
+npx -y -p lawbor-bot lawbor-try offer "an MCP tool" 5000000   # list an offer → prints a jobId
+npx -y -p lawbor-bot lawbor-try quote  <jobId> 4500000     # haggle a structured price
+npx -y -p lawbor-bot lawbor-try confirm <jobId> 4500000    # (owner) LOCK the agreed price
+npx -y -p lawbor-bot lawbor-try thread <jobId>             # the whole negotiation in one view
+```
+
+**Two strangers, two machines:** A runs `offer` and shares the jobId; B runs `quote <jobId> <amt>`; A
+runs `quote <jobId> <amt>` then `confirm`. `agreedPrice` derives and locks between them, through the
+public node, with zero setup on either end. For production, add your own key and run the stdio MCP
+(`npx -y -p lawbor-bot lawbor-mcp`) so your wallet — not this process — signs.
 
 ## Why it's different
 

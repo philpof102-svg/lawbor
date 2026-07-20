@@ -12,7 +12,8 @@
   "bin": {
     "lawbor-mcp": "bin/lawbor-mcp.js",
     "lawbor-node": "server.js",
-    "lawbor-bot": "bin/lawbor-mcp.js"
+    "lawbor-bot": "bin/lawbor-mcp.js",
+    "lawbor-try": "bin/lawbor-try.js"
   },
   "files": [
     "bin/",
