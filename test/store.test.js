@@ -101,6 +101,33 @@ t('compaction is THREAD-ATOMIC — it never orphans a reply from its opening mes
   try { fs.rmSync(d2, { recursive: true, force: true }); } catch {}
 });
 
+t('age retention is THREAD-ATOMIC too — a live thread keeps its OLD seed, a stale thread drops whole', () => {
+  // If LAWBOR_MAX_AGE_DAYS is ever set to purge old trials, the age floor must not drop an old
+  // help_wanted that still has a fresh reply — that would orphan the live negotiation. Age drops a
+  // thread only when its NEWEST activity is stale.
+  const d3 = fs.mkdtempSync(path.join(os.tmpdir(), 'lawbor-age-'));
+  const DAY = 86_400_000, T = 1_000_000_000_000;               // fixed clock, no Date.now in the assertion
+  const s3 = createStore(path.join(d3, 's.jsonl'), undefined, { maxAgeMs: 7 * DAY, compactEvery: 0 });
+  let n = 0;
+  const put = (thread, from, to, work, rxAt) =>
+    s3.record({ id: '0x' + (++n).toString(16).padStart(6, '0'), thread, from, to, body: work, ts: n },
+              { origin: 'bot', dir: from === A ? 'out' : 'in', rxAt });
+  // 'live': an OLD seed (10 days) but a FRESH reply (today) → last activity is today → keep WHOLE.
+  put('live', A, B, buildWork('help_wanted', { jobId: 'jl', task: 'x' }), T - 10 * DAY);
+  put('live', B, A, buildWork('bid', { jobId: 'jl', price: '5' }), T - 1 * DAY);
+  // 'stale': no activity in 10 days → the whole thread is dropped.
+  put('stale', A, B, buildWork('help_wanted', { jobId: 'js', task: 'y' }), T - 10 * DAY);
+  put('stale', B, A, buildWork('bid', { jobId: 'js', price: '9' }), T - 9 * DAY);
+  s3.compact({ now: () => T });
+  const kept = s3.all();
+  const threads = new Set(kept.map((m) => m.thread));
+  assert.ok(threads.has('live') && !threads.has('stale'), 'stale thread purged whole, live thread survived');
+  assert.equal(kept.filter((m) => m.thread === 'live').length, 2, 'the LIVE thread kept BOTH messages — its old seed was not orphaned');
+  const folded = foldThread(kept, {});
+  assert.ok(folded.has('jl') && !folded.has('js'), 'fold sees the intact live job, and nothing stale');
+  try { fs.rmSync(d3, { recursive: true, force: true }); } catch {}
+});
+
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 console.log(`\n${pass} passed · ${fail} failed`);
 process.exit(fail ? 1 : 0);
