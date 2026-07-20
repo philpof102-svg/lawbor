@@ -312,6 +312,38 @@ t('first-write-wins on a txHash: one transfer settles at most one job', () => {
   assert.equal(settled.length, 1, 'the reused txHash settles exactly one job, not two');
 });
 
+t('a SELF-transfer never settles a job: requester==worker + real from==to tx stays awarded (no wash → PAID)', () => {
+  // A bug-bounty hunt found settle lacked the from!==to guard that validate/offer have, so a
+  // requester who awarded THEMSELVES and cited a real self-transfer flipped the job to "PAID".
+  const self = [
+    row(REQ, REQ, buildWork('help_wanted', { jobId: 'j1', task: 't' })),
+    row(REQ, REQ, buildWork('award', { jobId: 'j1', worker: REQ, price: '500 USDC' })),
+    row(REQ, REQ, buildWork('settle', { jobId: 'j1', txHash: TX, amountMicro: '500000000' })),
+  ];
+  const selfFact = new Map([[TX, fact({ from: REQ, to: REQ })]]);
+  const j = foldThread(self, { txFacts: selfFact }).get('j1');
+  assert.notEqual(j.state, 'settled', 'a self-transfer must not settle the job');
+  assert.equal(settlementsFrom(self, { txFacts: selfFact }).length, 0, 'and it confers no rating edge');
+});
+
+t('GRIEF-PROOF: an unverified claim citing a real tx first does NOT block the genuine settle', () => {
+  // seenTx used to be burned BEFORE verification, so an attacker front-running a real payment's
+  // txHash on a job whose parties do NOT match could poison it — the genuine settle then hit
+  // seenTx.has and the job never flipped. Now only a VERIFIED, first-use tx burns the hash.
+  const grief = [
+    // attacker's own job b: they cite the victim's real TX, but b's payee is W2 (mismatch ⇒ unverified)
+    row(W2, REQ, buildWork('help_wanted', { jobId: 'b', task: 't' })),
+    row(W2, REQ, buildWork('award', { jobId: 'b', worker: W2, price: '500 USDC' })),
+    row(W2, REQ, buildWork('settle', { jobId: 'b', txHash: TX, amountMicro: '500000000' })),  // rxAt earlier
+    // the genuine job a: REQ→W1, the TX actually matches
+    ...awarded(),
+    row(REQ, W1, buildWork('settle', { jobId: 'j1', txHash: TX, amountMicro: '500000000' })),
+  ];
+  const jobs = foldThread(grief, { txFacts: new Map([[TX, fact()]]) });  // fact is REQ→W1
+  assert.notEqual(jobs.get('b').state, 'settled', "attacker's mismatched job never verifies");
+  assert.equal(jobs.get('j1').state, 'settled', 'the genuine settle is NOT denied by the earlier bad claim');
+});
+
 t('a SETTLED upstream still satisfies a dependent job (settled ⊇ awarded)', () => {
   const m = [
     row(REQ, W1, buildWork('help_wanted', { jobId: 'build', task: 'b' })), row(REQ, W1, buildWork('award', { jobId: 'build', worker: W1, price: '500 USDC' })),
