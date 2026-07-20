@@ -47,6 +47,7 @@ const TOOLS = [
   { name: 'lawbor_settle', description: 'Bind an awarded job to a REAL USDC transfer on Base, by txHash. Only the requester or the awarded worker may settle, and only after an award. The claim becomes a verified settlement ONLY if the on-chain tx matches the signed award exactly (Base chainId 8453, USDC, payer = the requester who signed the award, payee = the awarded worker, exact amount, >=12 confirmations); otherwise it confers nothing. LAWBOR moves no funds — the two parties transfer directly and this records a pointer anyone can re-verify and refute. `settled` means PAID, never delivered. Input: to, jobId, txHash (0x, 32 bytes), amountMicro (USDC 6-decimals, integer string), deliverable? (the PR/commit paid for — an opaque, unverified pointer).', inputSchema: { type: 'object', properties: { to: { type: 'string' }, jobId: { type: 'string' }, txHash: { type: 'string' }, amountMicro: { type: 'string' }, deliverable: { type: 'string' }, as: { type: 'string' } }, required: ['to', 'jobId', 'txHash', 'amountMicro'] } },
   { name: 'lawbor_credit', description: 'READ-ONLY: the rating between bots, as seen FROM THIS NODE ONLY. There is no global score and no leaderboard — standing is a conserved, debited quantity bounded by this node\'s own irrecoverable spend, which is what makes it unfarmable by a collusion ring (five rating designs were farmed by an adversary before this one; see RATING-DESIGN.md). Returns directUsdc (net USDC this node itself paid, under an award it signed, verified on Base) and circleUsdc (attenuated credit conferred by the addresses this node paid, out of a FINITE budget), plus the re-verifiable evidence rows. Cold start is total: a node that has paid nobody sees 0 for everyone. Input: of? (0x address to look up).', inputSchema: { type: 'object', properties: { of: { type: 'string' } }, additionalProperties: false } },
   { name: 'lawbor_award', description: 'Award your job to one bidder. Only the requester may award, and the award restates the agreed price — that is the requester\'s signed commitment. Settlement is NOT included: settlementRef is an opaque string LAWBOR never creates or checks. Input: to (the winner), jobId, worker, price, eta?, settlementRef?.', inputSchema: { type: 'object', properties: { to: { type: 'string' }, jobId: { type: 'string' }, worker: { type: 'string' }, price: { type: 'string' }, eta: { type: 'string' }, settlementRef: { type: 'string' } }, required: ['to', 'jobId', 'worker', 'price'] } },
+  { name: 'lawbor_peer', description: 'READ-ONLY: your WHOLE relationship with one counterparty in a single view — the "should I deal with this address?" read. Composes: `trust` (the same two lenses as lawbor_vet — local conserved history + MainStreet oracle, never merged); `jobs` (every negotiation you both took part in — as requester/worker or seller/buyer — with its state, agreedPrice, award and settled flag); and `threads` (your conversations with them). Where lawbor_vet answers "can I trust them?", lawbor_peer answers "what is everything between us, right now?" — so an agent can decide and act on one call. Advisory: it gates nothing. Input: of (0x address).', inputSchema: { type: 'object', properties: { of: { type: 'string' } }, required: ['of'], additionalProperties: false } },
   { name: 'lawbor_vet', description: 'READ-ONLY: vet one counterparty through BOTH trust lenses, kept separate on purpose. `oracle` = MainStreet\'s answer (seller decision/score from its x402 settlement index, plus its viewer-relative counterparty block when the oracle supports it) — REPORTED by a service this node does not control, so it is labeled, never merged into local standing. `local` = what THIS node itself verified on Base (directUsdcMicro = we provably paid them under a signed award; inboundUsdcMicro = they provably paid us). The two lenses answer different questions — "is this a legitimate endpoint?" vs "do WE have real settled history?" — and averaging them would launder the oracle\'s word into local proof, so no combined number exists. Advisory only: this read never gates anything (admission stays fail-closed elsewhere). Input: of (0x address).', inputSchema: { type: 'object', properties: { of: { type: 'string' } }, required: ['of'], additionalProperties: false } },
 ];
 
@@ -172,6 +173,51 @@ async function dispatch(msg, deps = {}) {
             })),
             lenses: 'trust = what THIS node verified on-chain (conserved, unfarmable). oracle = MainStreet advisory (ORACLE-REPORTED, viewer-relative, never enters local standing). Separate, never merged.',
             note: 'buy: agree a price by lawbor_say, pay the seller in USDC on Base yourself, then lawbor_settle with the txHash against the offer jobId. Trust = what YOU paid this seller (conserved, unfarmable); the purchase count is NOT trust (a seller can buy their own listing).',
+          };
+        } else if (name === 'lawbor_peer') {
+          // RELATIONSHIP VIEW: everything between me and one address in one read — the two trust lenses
+          // (like lawbor_vet), the negotiations we BOTH took part in, and our conversations. So an agent
+          // decides "should I deal with them, and where do we stand?" on a single call. Read-only.
+          const lower = (x) => String(x || '').toLowerCase();
+          const of = lower(a.of);
+          if (!/^0x[a-f0-9]{40}$/.test(of)) return ok({ content: [{ type: 'text', text: 'of (0x address) required' }], isError: true });
+          const self = lower(node.self);
+          const { blocked: pBlocked } = node.store.control();
+          const pMsgs = node.store.all().filter((m) => !pBlocked.has(lower(m.from)));
+          if (typeof deps.resolveFacts === 'function') await deps.resolveFacts(pMsgs);
+          const vc = creditFor(node.self, work.settlementsFrom(pMsgs, { txFacts: deps.txFacts || null }), { returnFlow: deps.returnFlow || null });
+          let oracle;
+          if (typeof deps.preflight === 'function') {
+            try { const p = await Promise.race([deps.preflight(of), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))]);
+              oracle = { source: 'MainStreet preflight', decision: p.decision || null, score: p.score ?? null, counterparty: p.counterparty || null,
+                disclosure: 'ORACLE-REPORTED: not verified by this node, does NOT enter local standing.' };
+            } catch (e) { oracle = { error: 'oracle unreachable: ' + (e && e.message), disclosure: 'advisory only — admission stays fail-closed elsewhere' }; }
+          } else oracle = { error: 'no preflight wired here' };
+          const partiesOf = (j) => { const s = new Set([lower(j.requester)]); (j.bids || []).forEach((b) => s.add(lower(b.worker))); if (j.award) s.add(lower(j.award.worker)); (j.quotes || []).forEach((q) => s.add(lower(q.party))); (j.purchases || []).forEach((pu) => { s.add(lower(pu.buyer)); s.add(lower(pu.seller)); }); return s; };
+          const jobs = [...work.foldThread(pMsgs, { txFacts: deps.txFacts || null }).values()].filter((j) => { const s = partiesOf(j); return s.has(self) && s.has(of); }).map((j) => ({
+            jobId: j.jobId, isOffer: !!j.isOffer, state: j.state,
+            role: lower(j.requester) === self ? (j.isOffer ? 'seller' : 'requester') : (j.isOffer ? 'buyer' : 'worker'),
+            agreedPrice: j.agreedPrice || null, award: j.award ? { worker: j.award.worker, price: j.award.price } : null,
+            settled: !!j.settlement, thread: j.thread,
+          }));
+          const byThread = new Map();
+          for (const m of pMsgs) {
+            if (lower(m.from) !== of && lower(m.to) !== of) continue;
+            const t = byThread.get(m.thread) || { thread: m.thread, count: 0, last: null, lastAt: -1 };
+            t.count++; const at = Number.isFinite(m.rxAt) ? m.rxAt : 0;
+            if (at >= t.lastAt) { t.lastAt = at; const w = work.parseWork(m.body); t.last = w ? '[' + w.kind + (w.amountMicro ? ' ' + w.amountMicro : '') + ']' : String(m.body || '').slice(0, 80); }
+            byThread.set(m.thread, t);
+          }
+          const threads = [...byThread.values()].sort((x, y) => y.lastAt - x.lastAt).map(({ lastAt, ...rest }) => rest);
+          payload = {
+            peer: of, viewer: self,
+            trust: {
+              local: { directUsdcMicro: String(vc.direct.get(of) || 0), inboundUsdcMicro: String(vc.inbound.get(of) || 0), circleUsdcMicro: String(vc.circle.get(of) || 0) },
+              oracle,
+              lenses: 'local = what WE settled on Base (conserved, unfarmable; 0 = no shared history, not a bad mark). oracle = MainStreet advisory, never merged in.',
+            },
+            jobs, threads,
+            note: 'the whole relationship in one read: trust + every negotiation between you two + your conversations. Advisory, gates nothing.',
           };
         } else if (name === 'lawbor_vet') {
           // THE COMPOSITION VERB: LAWBOR stops being its own oracle and stacks the

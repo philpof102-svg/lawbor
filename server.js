@@ -991,7 +991,7 @@ function build(deps = {}) {
          * a local operator is unaffected and the internet gets a read-only surface — which is exactly
          * what this deployment claims to be. Default-deny: a tool not on the read list is a write. */
         const READ_TOOLS = new Set(['lawbor_whoami', 'lawbor_inbox', 'lawbor_watch', 'lawbor_thread',
-          'lawbor_requests', 'lawbor_jobs', 'lawbor_graph', 'lawbor_wanted', 'lawbor_credit', 'lawbor_bazaar', 'lawbor_vet']);
+          'lawbor_requests', 'lawbor_jobs', 'lawbor_graph', 'lawbor_wanted', 'lawbor_credit', 'lawbor_bazaar', 'lawbor_vet', 'lawbor_peer']);
         if (msg && msg.method === 'tools/call' && !READ_TOOLS.has(((msg.params || {}).name) || '')) {
           if (!(await operatorOk(req))) {
             return json(res, 200, { jsonrpc: '2.0', id: msg.id === undefined ? null : msg.id,

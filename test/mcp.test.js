@@ -24,13 +24,13 @@ const payload = (r) => JSON.parse(r.result.content[0].text);
 (async () => {
   console.log('LAWBOR MCP — the gitlawb/openclaude tool surface:');
 
-  await t('initialize + tools/list expose the 23 lawbor tools on protocol ' + PROTOCOL, async () => {
+  await t('initialize + tools/list expose the 24 lawbor tools on protocol ' + PROTOCOL, async () => {
     const init = await dispatch({ jsonrpc: '2.0', id: 1, method: 'initialize' }, { node });
     assert.equal(init.result.protocolVersion, PROTOCOL); assert.equal(init.result.serverInfo.name, 'lawbor');
     const list = await dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, { node });
-    assert.equal(list.result.tools.length, 23);
+    assert.equal(list.result.tools.length, 24);
     assert.equal(list.result.tools.map((x) => x.name).sort().join(),
-      'lawbor_accept,lawbor_award,lawbor_bazaar,lawbor_bid,lawbor_block,lawbor_bot_say,lawbor_credit,lawbor_graph,lawbor_inbox,lawbor_jobs,lawbor_offer,lawbor_post_job,lawbor_quote,lawbor_requests,lawbor_say,lawbor_settle,lawbor_thread,lawbor_unblock,lawbor_validate,lawbor_vet,lawbor_wanted,lawbor_watch,lawbor_whoami');
+      'lawbor_accept,lawbor_award,lawbor_bazaar,lawbor_bid,lawbor_block,lawbor_bot_say,lawbor_credit,lawbor_graph,lawbor_inbox,lawbor_jobs,lawbor_offer,lawbor_peer,lawbor_post_job,lawbor_quote,lawbor_requests,lawbor_say,lawbor_settle,lawbor_thread,lawbor_unblock,lawbor_validate,lawbor_vet,lawbor_wanted,lawbor_watch,lawbor_whoami');
   });
 
   await t('lawbor_vet: two lenses side by side, LABELED — oracle word is never merged into local proof', async () => {
@@ -169,6 +169,24 @@ const payload = (r) => JSON.parse(r.result.content[0].text);
     assert.ok(tr.messages.some((m) => m.work && m.work.kind === 'quote' && m.work.amountMicro === '5000000'), 'the quote is parsed inline — a readable number');
     const j = tr.jobs.find((x) => x.jobId === 'th-neg');
     assert.ok(j && j.agreedPrice && j.agreedPrice.amountMicro === '5000000', 'the DERIVED agreedPrice is visible in the thread view — one read = the whole deal');
+  });
+
+  await t('lawbor_peer → the whole relationship: trust + jobs we BOTH took part in + our threads', async () => {
+    const { buildWork } = require('../lib/work');
+    const { buildEnvelope } = require('../lib/envelope');
+    await call('lawbor_post_job', { to: B, jobId: 'pr-job', task: 'index a contract' });                 // A posts
+    node.store.record(buildEnvelope({ from: B, to: A, body: buildWork('bid', { jobId: 'pr-job', price: '8 USDC' }), viaHuman: null }).envelope, { origin: 'bot', dir: 'in' }); // B bids
+    await call('lawbor_award', { to: B, jobId: 'pr-job', worker: B, price: '8 USDC' });                   // A awards B
+    const p = payload(await call('lawbor_peer', { of: B }));
+    assert.equal(p.peer, B.toLowerCase());
+    const j = p.jobs.find((x) => x.jobId === 'pr-job');
+    assert.ok(j && j.role === 'requester' && j.state === 'awarded', 'the shared, awarded job shows with my role');
+    assert.ok(p.trust && p.trust.local && p.trust.oracle, 'both trust lenses present');
+    assert.ok(Array.isArray(p.threads), 'our conversations are listed');
+    // a job that does NOT involve B must be excluded
+    const C = '0x' + 'cc'.repeat(20);
+    node.store.record(buildEnvelope({ from: A, to: C, body: buildWork('help_wanted', { jobId: 'pr-other', task: 'x' }), viaHuman: null }).envelope, { origin: 'bot', dir: 'out' });
+    assert.ok(!payload(await call('lawbor_peer', { of: B })).jobs.some((x) => x.jobId === 'pr-other'), 'a job with a DIFFERENT peer is not in this relationship');
   });
 
   try { fs.unlinkSync(db); } catch {}

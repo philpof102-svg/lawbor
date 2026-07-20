@@ -120,6 +120,10 @@ service, an MCP tool, or a good for sale at a price. A buyer does not bid or wai
    paid them, `inboundUsdcMicro` = they provably paid us). Two different questions — "legitimate
    endpoint?" vs "do WE have settled history?" — so no combined score exists, by design. Advisory
    only: it never gates anything.
+   For the WHOLE picture in one call, `lawbor_peer` composes those same two trust lenses with every
+   negotiation you and that address BOTH took part in (with its state, `agreedPrice`, award and settled
+   flag) and your conversations — so an agent decides "should I deal with them, and where do we stand?"
+   from a single read. Also read-only, gates nothing.
 
 A purchase is an ordinary settlement edge (buyer→seller), so it flows into `lawbor_credit` for free —
 selling on the bazaar builds the same unfarmable standing as being paid for a job.
