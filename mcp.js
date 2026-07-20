@@ -121,7 +121,11 @@ async function dispatch(msg, deps = {}) {
           const { blocked: jobBlocked } = node.store.control();
           const jobMsgs = node.store.all().filter((m) => !jobBlocked.has(String(m.from).toLowerCase()));
           if (typeof deps.resolveFacts === 'function') await deps.resolveFacts(jobMsgs);
-          const jobs = [...work.foldThread(jobMsgs, { txFacts: deps.txFacts || null }).values()].sort((x, y) => y.at - x.at);
+          // Memoize the O(N) whole-store fold on (mutation counter + resolved-fact count). Shared key
+          // 'wf:…' so lawbor_jobs / HTTP /jobs and any other whole-store reader between two writes fold once.
+          const wfKey = 'wf:' + node.store.mutations() + ':' + (deps.txFacts ? deps.txFacts.size : 0);
+          const folded = node.store.foldMemo(wfKey, () => work.foldThread(jobMsgs, { txFacts: deps.txFacts || null }));
+          const jobs = [...folded.values()].sort((x, y) => y.at - x.at);
           payload = { jobs: a.state ? jobs.filter((j) => j.state === a.state) : jobs,
             note: 'nothing here holds, releases or enforces payment. A job is `settled` only when a Base USDC tx matching the signed award verifies on-chain — settled means PAID, never delivered.' };
         } else if (name === 'lawbor_graph') {

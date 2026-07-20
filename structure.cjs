@@ -234,8 +234,8 @@ const TX = (n) => '0x' + String(n).padStart(64, '0');
 // ---------------------------------------------------------------------------------------------
 {
   const pkg = JSON.parse(norm(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')));
-  record('pkg.bins', ['lawbor-bot', 'lawbor-mcp', 'lawbor-node'], Object.keys(pkg.bin || {}).sort(),
-    'npx resolves a bin whose NAME matches the package — lawbor-bot must exist or `npx lawbor-bot` cannot run');
+  record('pkg.bins', ['lawbor-bot', 'lawbor-mcp', 'lawbor-node', 'lawbor-try'], Object.keys(pkg.bin || {}).sort(),
+    'npx resolves a bin whose NAME matches the package — lawbor-bot must exist or `npx lawbor-bot` cannot run; lawbor-try is the zero-config onramp');
   record('pkg.no-hard-deps', [], Object.keys(pkg.dependencies || {}),
     'a hard dependency would break the zero-dependency claim the core makes');
   /* AND THE OTHER HALF, which the previous version quietly did not check: viem must actually BE in

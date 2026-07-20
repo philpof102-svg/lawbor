@@ -928,7 +928,10 @@ function build(deps = {}) {
         const { blocked: jobBlocked } = store.control();
         const jobMsgs = store.all().filter((m) => !jobBlocked.has(String(m.from).toLowerCase()));
         await resolveFacts(jobMsgs);
-        const jobs = [...work.foldThread(jobMsgs, foldOpts).values()].sort((a, b) => b.at - a.at);
+        // Memoize the O(N) whole-store fold on (mutations + resolved-fact count). Same 'wf:' key as the
+        // MCP lawbor_jobs, so the two share the cached fold between writes instead of each paying O(N).
+        const wfKey = 'wf:' + store.mutations() + ':' + (txFacts ? txFacts.size : 0);
+        const jobs = [...store.foldMemo(wfKey, () => work.foldThread(jobMsgs, foldOpts)).values()].sort((a, b) => b.at - a.at);
         const state = q.get('state');
         return json(res, 200, {
           jobs: state ? jobs.filter((j) => j.state === state) : jobs,
