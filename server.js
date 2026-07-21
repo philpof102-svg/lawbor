@@ -594,8 +594,15 @@ function build(deps = {}) {
    * so nothing is loopback) wire deps.verifyAuth to operate these controls remotely. Peer traffic
    * (/lawbor/accept) is unaffected: it is reputation-gated, not operator-gated. */
   const isLoopback = (req) => { const ra = (req.socket && req.socket.remoteAddress) || ''; return ra === '127.0.0.1' || ra === '::1' || ra === '::ffff:127.0.0.1'; };
+  // A genuine same-host caller (desktop pod, tests) sets no x-forwarded-* header; an HTTP reverse proxy
+  // that TERMINATES to loopback while forwarding external traffic does. Defense-in-depth (security
+  // backlog re-audit): treat loopback-WITH-a-forwarding-header as REMOTE — it must sign as self, exactly
+  // like any off-host caller — so a mis-configured same-host proxy can't launder a stranger into operator
+  // trust. (A raw TCP forwarder adds no header and is NOT closed by this — accepted given the single-port
+  // /mcp design; close fully by binding the operator surface to a 127.0.0.1-only port.)
+  const forwardedIn = (req) => { const h = req.headers || {}; return !!(h['x-forwarded-for'] || h['forwarded'] || h['x-forwarded-host'] || h['x-real-ip']); };
   async function operatorOk(req) {
-    if (isLoopback(req)) return true;
+    if (isLoopback(req) && !forwardedIn(req)) return true;
     // Reads the SAME resolved verifier as authCaller. It used to read deps.verifyAuth directly while
     // authCaller read the resolved one — two gates disagreeing about whether a verifier is wired is the
     // drift that makes a security question unanswerable. WIDENING, stated plainly: now that a verifier

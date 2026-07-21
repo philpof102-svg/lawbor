@@ -260,6 +260,17 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     assert.equal(await call('203.0.113.7', '/delete', { id: 'x' }), 401, 'remote /delete is refused (no store-wipe)');
     assert.equal(await call('203.0.113.7', '/block', { addr: B }), 401, 'remote /block is refused');
     assert.equal(await call('127.0.0.1', '/delete', { id: 'nope' }), 200, 'loopback /delete is allowed (id just not found)');
+    // DEFENSE-IN-DEPTH: loopback CARRYING a forwarding header = an HTTP reverse proxy terminating external
+    // traffic to 127.0.0.1. Treat it as remote (must sign) so a mis-configured same-host proxy can't launder
+    // a stranger into operator trust. No verifier here ⇒ 401. (Bare loopback above still returns 200.)
+    const callH = (remoteAddress, headers, url, payload) => new Promise((resolve) => {
+      const req = { method: 'POST', url, headers: { 'content-type': 'application/json', ...headers }, socket: { remoteAddress },
+        on(ev, cb) { if (ev === 'data') cb(JSON.stringify(payload)); if (ev === 'end') cb(); }, destroy() {} };
+      const res = { statusCode: 0, writeHead(c) { this.statusCode = c; }, end() { resolve(this.statusCode); } };
+      handler(req, res);
+    });
+    assert.equal(await callH('127.0.0.1', { 'x-forwarded-for': '203.0.113.7' }, '/delete', { id: 'x' }), 401, 'loopback WITH x-forwarded-for is treated as remote → refused');
+    assert.equal(await callH('127.0.0.1', { 'x-real-ip': '203.0.113.7' }, '/block', { addr: B }), 401, 'x-real-ip on loopback is refused too');
   });
 
   // The PRODUCTION posture wires a verifier (the live node reports authenticatesSenders:true). In that
