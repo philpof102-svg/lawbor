@@ -45,12 +45,28 @@ jobs:
 
       - name: npm publish
         if: ${{ inputs.dry_run != 'true' }}
-        # continue-on-error: if this exact version is already on npm (publish-over → E403) or the
-        # NPM_TOKEN secret is absent, the MCP registry publish below must still run.
+        # continue-on-error: if this exact version is already on npm (publish-over → E403) the MCP
+        # registry publish below must still run. The verify step next is what makes a REAL failure loud.
         continue-on-error: true
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # THE HONESTY GATE. v0.2.1 taught this: with continue-on-error above, an ABSENT/dead NPM_TOKEN
+      # made the npm step silently no-op — the run stayed green while npm never got the version (the
+      # v0.2.0 "success" was actually validating a LOCAL publish). This step makes the pipeline unable
+      # to lie: either npm serves exactly this version (retrying through registry propagation lag,
+      # which also 404'd the MCP step once), or the run fails naming the real cause.
+      - name: Verify npm actually has this version
+        if: ${{ inputs.dry_run != 'true' }}
+        run: |
+          V=$(node -p "require('./package.json').version")
+          for i in $(seq 1 12); do
+            GOT=$(npm view lawbor-bot@"$V" version 2>/dev/null || true)
+            if [ "$GOT" = "$V" ]; then echo "npm serves lawbor-bot@$V"; exit 0; fi
+            echo "npm does not serve $V yet (attempt $i/12) — waiting 10s"; sleep 10
+          done
+          echo "::error::lawbor-bot@$V never appeared on npm — the publish step failed silently (is the NPM_TOKEN secret set? see the header of this file)"; exit 1
 
       - name: Install mcp-publisher
         if: ${{ inputs.dry_run != 'true' }}
