@@ -4,7 +4,7 @@
 // debited quantity bounded by the VIEWER's own spend. If these pass, a collusion ring earns nothing.
 // Run: node test/credit.test.js
 const assert = require('node:assert');
-const { creditFor } = require('../lib/credit');
+const { creditFor, explainCredit } = require('../lib/credit');
 
 let pass = 0, fail = 0;
 const t = (n, fn) => { try { fn(); pass++; console.log('  ✓ ' + n); } catch (e) { fail++; console.log('  ✗ ' + n + '\n      ' + (e && e.message)); } };
@@ -114,6 +114,65 @@ t('deterministic: shuffling the edge order yields the same credit', () => {
   const b = creditFor(V, es.slice().reverse(), { alpha: 0.5 });
   assert.deepEqual([...a.direct.entries()].sort(), [...b.direct.entries()].sort());
   assert.deepEqual([...a.circle.entries()].sort(), [...b.circle.entries()].sort());
+});
+
+// ---- explainCredit: the rating made auditable (numbers MATCH creditFor, evidence is the raw edges) ----
+console.log('\nLAWBOR credit — explainCredit (why the score is what it is, provable per txHash):');
+
+t('the explained numbers MATCH creditFor exactly (direct + circle), for every subject', () => {
+  const es = [edge(V, W, 100, 10, 1), edge(V, X, 80, 11, 2), edge(X, Y, 200, 12, 3)];
+  const c = creditFor(V, es, { alpha: 0.5 });
+  for (const s of [W, X, Y]) {
+    const e = explainCredit(V, s, es, { alpha: 0.5 });
+    assert.equal(Number(e.directMicro), c.direct.get(s) || 0, 'direct matches for ' + s);
+    assert.equal(Number(e.circleMicro), c.circle.get(s) || 0, 'circle matches for ' + s);
+  }
+});
+
+t('direct evidence is the RAW settlement edges V→W (txHash + jobId), summing to directMicro', () => {
+  const es = [edge(V, W, 60, 10, 1), edge(V, W, 40, 11, 2), edge(V, X, 5, 12, 3)];
+  const e = explainCredit(V, W, es, { alpha: 0.5 });
+  assert.equal(e.direct.length, 2);
+  assert.deepEqual(e.direct.map((x) => x.txHash), [es[0].txHash, es[1].txHash]); // blockTime-ordered
+  assert.equal(Number(e.directMicro), 100);
+  assert.equal(e.circle.length, 0);
+});
+
+t('circle evidence names the SEED that conferred budget and the grant that landed on W', () => {
+  // V pays X 200 → X gets budget α·200 = 100 → X pays W 150 → W receives grant min(150,100)=100
+  const es = [edge(V, X, 200, 10, 1), edge(X, W, 150, 11, 2)];
+  const e = explainCredit(V, W, es, { alpha: 0.5 });
+  assert.equal(Number(e.circleMicro), 100);
+  assert.equal(e.circle.length, 1);
+  assert.equal(e.circle[0].via, X);
+  assert.equal(e.circle[0].grantMicro, '100');
+  assert.equal(e.circle[0].viaSeededMicro, '200', 'names how much V paid the seed');
+});
+
+t('the conservation bound is reported and actually binds: total ≤ (1+α)·spend(V)', () => {
+  const es = [edge(V, W, 100, 10, 1), edge(V, X, 40, 11, 2), edge(X, W, 999, 12, 3), edge(Y, W, 999, 13, 4)];
+  const e = explainCredit(V, W, es, { alpha: 0.5 });
+  const spend = 140; // V paid W 100 + X 40
+  assert.equal(Number(e.bound.spendMicro), spend);
+  assert.equal(Number(e.bound.maxTotalMicro), Math.floor(spend * 1.5));
+  assert.ok(Number(e.totalMicro) <= Number(e.bound.maxTotalMicro), 'W total is within the bound');
+  // Y paying W is worth 0 to V (Y is not a seed V paid) — the farming defense, made visible
+  assert.ok(!e.circle.some((c) => c.via === Y), 'a non-seed conferrer contributes nothing');
+});
+
+t('inbound is separate and evidenced: what W paid V (the client-good-for-it question)', () => {
+  const es = [edge(W, V, 70, 10, 1), edge(V, W, 30, 11, 2)];
+  const e = explainCredit(V, W, es, { alpha: 0.5 });
+  assert.equal(Number(e.inboundMicro), 70);
+  assert.equal(e.inbound.length, 1);
+  assert.equal(Number(e.directMicro), 30);
+});
+
+t('a stranger V never transacted with explains to all-zero with an empty evidence trail', () => {
+  const e = explainCredit(V, W, [edge(X, Y, 500, 10, 1)], { alpha: 0.5 });
+  assert.equal(e.totalMicro, '0');
+  assert.deepEqual([e.direct.length, e.circle.length, e.inbound.length], [0, 0, 0]);
+  assert.equal(e.bound.spendMicro, '0');
 });
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

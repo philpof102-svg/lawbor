@@ -36,7 +36,7 @@ const { createPaywall } = require('./lib/paywall');
 const beat = require('./lib/beat');
 const work = require('./lib/work');
 const { createChainReader } = require('./lib/chain');
-const { creditFor } = require('./lib/credit');
+const { creditFor, explainCredit } = require('./lib/credit');
 // OPTIONAL signature verifier (viem, lazily loaded). Absent ⇒ the relay stays fail-closed on inbound
 // peers, which /health reports. See lib/verify.js for why the crypto is not hand-rolled here.
 const { createVerifier, createAuthVerifier, verifierStatus, keyProofMessage } = require('./lib/verify');
@@ -974,6 +974,19 @@ function build(deps = {}) {
           limits: c.limits.concat(RATING_LIMITS),
         });
       }
+      if (req.method === 'GET' && url === '/why') {
+        // WHY the standing is what it is — the rating made auditable for one subject, provable per txHash.
+        const of = q.get('of');
+        if (!of) return json(res, 400, { error: '/why needs ?of=<0xaddress> — the address to explain this node\'s standing for' });
+        const { blocked: yBlocked } = store.control();
+        const msgs = store.all().filter((m) => !yBlocked.has(String(m.from).toLowerCase()));
+        await resolveFacts(msgs);
+        const edges = work.settlementsFrom(msgs, foldOpts);
+        const e = explainCredit(node.self, String(of).toLowerCase(), edges, { returnFlow: deps.returnFlow || null });
+        e.verifiesSettlements = (await settlementStatus()).verifying;
+        e.limits = (e.limits || []).concat(RATING_LIMITS);
+        return json(res, 200, e);
+      }
       if (req.method === 'GET' && url === '/jobs') {
         // a blocked address is invisible in /jobs too — fold only non-blocked messages, so a blocked
         // sender's job posts AND bids disappear (they used to show here even though you blocked them).
@@ -1046,7 +1059,7 @@ function build(deps = {}) {
          * a local operator is unaffected and the internet gets a read-only surface — which is exactly
          * what this deployment claims to be. Default-deny: a tool not on the read list is a write. */
         const READ_TOOLS = new Set(['lawbor_whoami', 'lawbor_inbox', 'lawbor_watch', 'lawbor_thread',
-          'lawbor_requests', 'lawbor_jobs', 'lawbor_graph', 'lawbor_wanted', 'lawbor_credit', 'lawbor_bazaar', 'lawbor_vet', 'lawbor_peer']);
+          'lawbor_requests', 'lawbor_jobs', 'lawbor_graph', 'lawbor_wanted', 'lawbor_credit', 'lawbor_why', 'lawbor_bazaar', 'lawbor_vet', 'lawbor_peer']);
         if (msg && msg.method === 'tools/call' && !READ_TOOLS.has(((msg.params || {}).name) || '')) {
           if (!(await operatorOk(req))) {
             return json(res, 200, { jsonrpc: '2.0', id: msg.id === undefined ? null : msg.id,
