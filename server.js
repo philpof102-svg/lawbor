@@ -860,9 +860,11 @@ function build(deps = {}) {
         const { blocked: zBlocked } = store.control();
         const zMsgs = store.all().filter((m) => !zBlocked.has(String(m.from).toLowerCase()));
         await resolveFacts(zMsgs);
-        const zc = creditFor(node.self, work.settlementsFrom(zMsgs, foldOpts), { returnFlow: deps.returnFlow || null });
+        // ONE memoized fold, reused for both the credit edges and the offer list (same 'wf:' key as /jobs).
+        const zFold = store.foldMemo('wf:' + store.mutations() + ':' + (txFacts ? txFacts.size : 0), () => work.foldThread(zMsgs, foldOpts));
+        const zc = creditFor(node.self, work.settlementsFromJobs(zFold.values()), { returnFlow: deps.returnFlow || null });
         const of = q.get('of') ? String(q.get('of')).toLowerCase() : null;
-        const rawOffers = [...work.foldThread(zMsgs, foldOpts).values()]
+        const rawOffers = [...zFold.values()]
           // delisted offers leave the BOARD but stay in the log (/jobs) — withdrawn, never erased
           .filter((j) => j.isOffer && j.state === 'offered' && (!of || j.requester === of))
           .sort((a, b) => b.at - a.at);
@@ -954,7 +956,8 @@ function build(deps = {}) {
         const { blocked: cBlocked } = store.control();
         const msgs = store.all().filter((m) => !cBlocked.has(String(m.from).toLowerCase()));
         await resolveFacts(msgs);
-        const edges = work.settlementsFrom(msgs, foldOpts);
+        const wfKey = 'wf:' + store.mutations() + ':' + (txFacts ? txFacts.size : 0);   // shared memoized fold (same key as /jobs)
+        const edges = work.settlementsFromJobs(store.foldMemo(wfKey, () => work.foldThread(msgs, foldOpts)).values());
         const c = creditFor(node.self, edges, { returnFlow: deps.returnFlow || null });
         const of = q.get('of');
         const num = (m, k) => String(m.get(String(k).toLowerCase()) || 0);
@@ -984,7 +987,8 @@ function build(deps = {}) {
         const { blocked: rBlocked } = store.control();
         const msgs = store.all().filter((m) => !rBlocked.has(String(m.from).toLowerCase()));
         await resolveFacts(msgs);
-        const edges = work.settlementsFrom(msgs, foldOpts);
+        const wfKey = 'wf:' + store.mutations() + ':' + (txFacts ? txFacts.size : 0);   // shared memoized fold (same key as /jobs)
+        const edges = work.settlementsFromJobs(store.foldMemo(wfKey, () => work.foldThread(msgs, foldOpts)).values());
         const r = detectRings(edges);
         r.verifiesSettlements = (await settlementStatus()).verifying;
         return json(res, 200, r);
@@ -996,7 +1000,8 @@ function build(deps = {}) {
         const { blocked: yBlocked } = store.control();
         const msgs = store.all().filter((m) => !yBlocked.has(String(m.from).toLowerCase()));
         await resolveFacts(msgs);
-        const edges = work.settlementsFrom(msgs, foldOpts);
+        const wfKey = 'wf:' + store.mutations() + ':' + (txFacts ? txFacts.size : 0);   // shared memoized fold (same key as /jobs)
+        const edges = work.settlementsFromJobs(store.foldMemo(wfKey, () => work.foldThread(msgs, foldOpts)).values());
         const e = explainCredit(node.self, String(of).toLowerCase(), edges, { returnFlow: deps.returnFlow || null });
         e.verifiesSettlements = (await settlementStatus()).verifying;
         e.limits = (e.limits || []).concat(RATING_LIMITS);
