@@ -217,6 +217,16 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     assert.deepEqual(listed.sort(), live.sort(), 'the card must not advertise tools the server does not have');
   });
 
+  await t('POST /mcp with a NOTIFICATION (no id) returns 204 and does NOT hang the socket', async () => {
+    // res.writeHead(204) returns res (truthy), so a `|| res.end()` never fires and the socket hangs
+    // until timeout on every notification. The AbortSignal makes a regression fail fast instead of
+    // hanging the whole suite. A clean 204 with a completing body proves end() runs.
+    const r = await fetch(urlA + '/mcp', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }), signal: AbortSignal.timeout(4000) });
+    assert.equal(r.status, 204, 'a JSON-RPC notification is acknowledged with 204');
+    await r.text();   // the response body must complete — this is what hung before the fix
+  });
+
   await t('premium: signed caller auth gates access over HTTP; a forged signature is refused', async () => {
     const { apps } = require('../apps/example');
     const WALLET = '0x' + '99'.repeat(20), PAYER = '0x' + 'b1'.repeat(20);

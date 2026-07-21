@@ -1059,7 +1059,10 @@ function build(deps = {}) {
         const out = await mcpDispatch(msg, { node, apps, txFacts, resolveFacts, returnFlow: deps.returnFlow || null,
           preflight: deps.preflight || mainstreetPreflight,
           requireProofAbove, provenAddrs: () => work.provenFrom(store.all(), foldOpts) });
-        return out ? json(res, 200, out) : res.writeHead(204, CORS) || res.end();   // notification → 204
+        // notification (no id) → 204. NB: res.writeHead() returns `res` (truthy), so `|| res.end()`
+        // would short-circuit and never finalize the response — the socket would hang until timeout on
+        // every JSON-RPC notification (broken MCP interop + a trivial hang-DoS). Chain .end() so it runs.
+        return out ? json(res, 200, out) : res.writeHead(204, CORS).end();
       }
       if (req.method === 'GET' && url === '/.well-known/mcp.json') {
         const b = 'http' + (req.headers['x-forwarded-proto'] === 'https' ? 's' : '') + '://' + (req.headers.host || 'localhost');
