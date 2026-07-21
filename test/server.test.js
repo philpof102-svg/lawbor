@@ -252,6 +252,29 @@ const get = async (base, p) => { const r = await fetch(base + p); return { statu
     assert.equal(await call('127.0.0.1', '/delete', { id: 'nope' }), 200, 'loopback /delete is allowed (id just not found)');
   });
 
+  // The PRODUCTION posture wires a verifier (the live node reports authenticatesSenders:true). In that
+  // mode the operator gate must require a SIGNATURE: the plaintext x-lawbor-caller header is spoofable,
+  // so a remote caller who claims to be `self` (which is public) with NO signature must still be refused.
+  // Before the authCaller fix this returned 200 (remote operator takeover); this locks it at 401.
+  await t('with a verifier wired, a remote caller spoofing x-lawbor-caller:self (no signature) is refused', async () => {
+    const dbV = path.join(LAWBOR_TMP, 'authgate.jsonl');
+    for (const f of [dbV, dbV + '.control', dbV + '.subs']) { try { fs.unlinkSync(f); } catch {} }
+    const botV = build({ self: A, human: 'phil', preflight: proceed, store: createStore(dbV),
+      verifyAuth: async ({ sig }) => ({ ok: /^0x[0-9a-f]{40}$/i.test(sig), signer: sig }) });  // stub: sig IS the signer
+    const handler = botV.server.listeners('request')[0];
+    const call = (headers, url, payload) => new Promise((resolve) => {
+      const req = { method: 'POST', url, headers: { 'content-type': 'application/json', ...headers }, socket: { remoteAddress: '203.0.113.9' },
+        on(ev, cb) { if (ev === 'data') cb(JSON.stringify(payload)); if (ev === 'end') cb(); }, destroy() {} };
+      const res = { statusCode: 0, writeHead(c) { this.statusCode = c; }, end() { resolve(this.statusCode); } };
+      handler(req, res);
+    });
+    assert.equal(await call({ 'x-lawbor-caller': A }, '/block', { addr: B }), 401, 'spoofed x-lawbor-caller:self with NO signature is refused');
+    assert.equal(await call({ 'x-lawbor-caller': A }, '/delete', { id: 'x' }), 401, 'and cannot wipe the store');
+    // the legitimate remote-operator path still works: a caller who actually SIGNS as self is accepted
+    assert.equal(await call({ 'x-lawbor-auth': A + ':' + A }, '/block', { addr: B }), 200, 'a caller who signs as self still operates');
+    for (const f of [dbV, dbV + '.control', dbV + '.subs']) { try { fs.unlinkSync(f); } catch {} }
+  });
+
   /* THE DEPENDENCY MUST STAY VISIBLE. Admission calls one HTTP oracle for every inbound envelope, and
    * the shipped default is a service WE run — so a node that does not disclose it is asking its operator
    * to trust a third party they were never told about. /health carried no mention of the oracle at all

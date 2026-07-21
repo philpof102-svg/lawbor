@@ -138,6 +138,27 @@ async function mainstreetPreflight(addr) {
  * would cost a dependency. This narrows the window, it does not eliminate it.
  */
 const MAX_CARD_BYTES = 64 * 1024;
+// Read a response body WITHOUT letting it exceed `max` bytes: stream + count when a body reader exists
+// (real fetch), so a peer cannot buffer gigabytes into memory before a post-hoc length check runs.
+// Falls back to res.text() with a post-hoc cap for the simple `{ ok, text }` doubles used in tests.
+async function readCapped(res, max) {
+  const body = res.body;
+  if (!body || typeof body.getReader !== 'function') {
+    const t = await res.text();
+    if (t.length > max) throw new Error('discovery card too large');
+    return t;
+  }
+  const reader = body.getReader();
+  const chunks = []; let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) { try { await reader.cancel(); } catch { /* best-effort */ } throw new Error('discovery card too large'); }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 async function fetchDiscoveryCard(url, doFetch, opts = {}) {
   const timeoutMs = opts.timeoutMs || 5000;
   const u = new URL(url);
@@ -158,8 +179,11 @@ async function fetchDiscoveryCard(url, doFetch, opts = {}) {
     headers: { accept: 'application/json' },
   });
   if (!res.ok) throw new Error('discovery card HTTP ' + res.status);
-  const text = await res.text();
-  if (text.length > MAX_CARD_BYTES) throw new Error('discovery card too large');
+  // Bound the read BEFORE buffering the whole body: reject a declared Content-Length over the cap up
+  // front, and let readCapped abort a lying/absent-length body the moment it streams past the cap.
+  const declared = Number(res.headers && res.headers.get && res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_CARD_BYTES) throw new Error('discovery card too large');
+  const text = await readCapped(res, MAX_CARD_BYTES);
   return JSON.parse(text);
 }
 
@@ -547,7 +571,12 @@ function build(deps = {}) {
       }
       return null;                                            // signed but did not verify → unauthenticated
     }
-    return req.headers['x-lawbor-caller'] || null;            // dev fallback (unauthenticated)
+    // A verifier IS wired ⇒ identity must be cryptographically signed. The plaintext x-lawbor-caller is
+    // spoofable, so in that mode it is NEVER trusted — an unsigned caller is anonymous (null). This is
+    // what makes operatorOk's comment true in CODE, not just intent: with a verifier live (the prod
+    // posture, authenticatesSenders:true), a remote caller can no longer claim to be `self` by header.
+    // The raw header stays a dev-only convenience for nodes that wired no verifier at all.
+    return (typeof verifyAuth === 'function') ? null : (req.headers['x-lawbor-caller'] || null);
   }
 
   /* Operator-only gate for LOCAL controls (block / unblock / accept / delete). These mutate the
