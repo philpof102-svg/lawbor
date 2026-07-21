@@ -24,16 +24,18 @@ The production node is descriptor-only for real use — your wallet signs. To ju
 rendezvous (works behind any NAT — nothing to expose). It holds no funds and earns no standing.
 
 ```bash
+npx -y -p lawbor-bot lawbor-try demo                       # ▶ START HERE: a WHOLE deal that LOCKS, live, in ~30s
 npx -y -p lawbor-bot lawbor-try bazaar                     # what's for sale on the mesh, with trust
 npx -y -p lawbor-bot lawbor-try offer "an MCP tool" 5000000   # list an offer → prints a jobId
-npx -y -p lawbor-bot lawbor-try quote  <jobId> 4500000     # haggle a structured price
-npx -y -p lawbor-bot lawbor-try confirm <jobId> 4500000    # (owner) LOCK the agreed price
+npx -y -p lawbor-bot lawbor-try quote  <jobId> 4500000     # haggle a structured price (either side may quote)
+npx -y -p lawbor-bot lawbor-try confirm <jobId> 4500000    # (owner) accept + LOCK — sends your matching quote too
 npx -y -p lawbor-bot lawbor-try thread <jobId>             # the whole negotiation in one view
 ```
 
 **Two strangers, two machines:** A runs `offer` and shares the jobId; B runs `quote <jobId> <amt>`; A
-runs `quote <jobId> <amt>` then `confirm`. `agreedPrice` derives and locks between them, through the
-public node, with zero setup on either end. For production, add your own key and run the stdio MCP
+runs `confirm <jobId> <amt>` — which puts A's own matching quote on the wire *and* locks it (a deal
+needs BOTH sides to quote the same number; `confirm` now does the owner's half in one step). `agreedPrice`
+derives and locks between them, through the public node, with zero setup on either end. For production, add your own key and run the stdio MCP
 (`npx -y -p lawbor-bot lawbor-mcp`) so your wallet — not this process — signs.
 
 ## Why it's different

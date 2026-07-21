@@ -12,6 +12,7 @@
  *
  *   npx -y -p lawbor-bot lawbor-try <command>
  * Commands:
+ *   demo                            run a WHOLE deal (two throwaway parties) that actually LOCKS — the 30-second proof
  *   whoami                          your throwaway address
  *   bazaar                          the public node's open offers (+ trust lenses)
  *   offer  <item> [priceHint]       list an offer; prints its jobId
@@ -88,13 +89,63 @@ const out = (o) => console.log(JSON.stringify(o, null, 2));
       }
       case 'confirm': {
         if (!args[0] || !/^\d+$/.test(args[1] || '')) throw new Error('usage: confirm <jobId> <amountMicro>');
-        const r = await sendWork(buildWork('confirm', { jobId: args[0], amountMicro: args[1] }), args[0]);
+        // The OWNER accepting a price is BOTH halves of their side: they must QUOTE the number (that is
+        // what derives agreedPrice against the counterparty's matching quote) AND confirm it (the lock).
+        // Sending only confirm never locks — agreedPrice needs the owner's own live quote — which made the
+        // obvious flow (offer → get a quote → confirm) look broken. One command now sends the whole side.
+        await sendWork(buildWork('quote', { jobId: args[0], amountMicro: args[1] }), args[0]);
+        await sendWork(buildWork('confirm', { jobId: args[0], amountMicro: args[1] }), args[0]);
         const j = (await get('/jobs')).jobs.find((x) => x.jobId === args[0]);
-        return out({ action: r.body.action, agreedPrice: (j && j.agreedPrice) || null, note: (j && j.agreedPrice && j.agreedPrice.accepted) ? 'LOCKED — the deal is sealed' : 'not locked yet (you must be the offer owner and the amount must match the agreed price)' });
+        const locked = !!(j && j.agreedPrice && j.agreedPrice.accepted);
+        let note;
+        if (locked) note = 'LOCKED — the deal is sealed at ' + args[1] + ' micro-USDC';
+        else {
+          const other = j && (j.quotes || []).find((q) => q.party !== self);
+          note = other
+            ? 'not locked: the other party quoted ' + other.amountMicro + ', not ' + args[1] + ' — converge on one number (have them run: lawbor-try quote ' + args[0] + ' ' + args[1] + '), then confirm locks'
+            : 'not locked: no counterparty has quoted yet — share this jobId so they run: lawbor-try quote ' + args[0] + ' ' + args[1] + ' — then confirm locks';
+        }
+        return out({ agreedPrice: (j && j.agreedPrice) || null, note });
+      }
+      case 'demo': {
+        // ONE command, zero config, that actually LOCKS a deal on the LIVE public node — the honest
+        // "it works" proof. A deal needs TWO parties: agreedPrice derives only when the OWNER and a
+        // COUNTERPARTY both hold matching live quotes, so the demo runs two throwaway identities and
+        // does the step every first-timer misses — the owner quoting the agreed number itself.
+        const mk = () => accounts.privateKeyToAccount(accounts.generatePrivateKey());
+        const seller = mk(), buyer = mk();
+        const jobId = 'demo-' + seller.address.slice(2, 8).toLowerCase() + '-' + Date.now();
+        const PRICE = '4000000'; // 4.00 USDC
+        const send = async (who, body) => {
+          const { envelope } = buildEnvelope({ from: who.address.toLowerCase(), to: NODE_ADDR, body, thread: threadFor(jobId), viaHuman: null });
+          const p = signablePayload(envelope);
+          envelope.sig = await who.signTypedData({ domain: p.domain, types: p.types, primaryType: p.primaryType, message: p.message });
+          const r = await fetch(NODE + '/lawbor/accept', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ envelope }), signal: AbortSignal.timeout(20000) });
+          return { status: r.status, body: await r.json().catch(() => ({})) };
+        };
+        const step = (n, s) => console.log('  ' + n + '. ' + s);
+        console.log('LAWBOR demo — a full deal, two throwaway identities, on the LIVE public node (' + NODE + '):\n');
+        step(1, 'seller ' + seller.address.slice(0, 10) + '… lists an offer (hint 5 USDC)');
+        await send(seller, buildWork('offer', { jobId, item: 'lawbor-try demo — throwaway, no funds', price: '5000000' }));
+        step(2, 'buyer  ' + buyer.address.slice(0, 10) + '… quotes 4 USDC');
+        await send(buyer, buildWork('quote', { jobId, amountMicro: PRICE }));
+        step(3, 'seller quotes 4 USDC too  ← the step first-timers miss (both sides must quote to converge)');
+        await send(seller, buildWork('quote', { jobId, amountMicro: PRICE }));
+        step(4, 'seller CONFIRMS 4 USDC (the owner locks the agreed price)');
+        await send(seller, buildWork('confirm', { jobId, amountMicro: PRICE }));
+        const j = (await get('/jobs')).jobs.find((x) => x.jobId === jobId);   // node's own DERIVED state — the fold every peer computes
+        const locked = !!(j && j.agreedPrice && j.agreedPrice.accepted);
+        console.log('\n  node-derived state → ' + JSON.stringify({ jobId, agreedPrice: (j && j.agreedPrice) || null }));
+        console.log('\n  ' + (locked
+          ? '✅ LOCKED — the deal is sealed at 4.00 USDC, verified by the public node. No wallet, no config.'
+          : '⚠️  not locked — the node may still be folding; re-run `lawbor-try thread ' + jobId + '`.'));
+        console.log('  In real life the buyer now pays 4 USDC on Base and runs `settle ' + jobId + ' <txHash>` — that is the only step that needs a wallet.');
+        return;
       }
       default:
         console.log('lawbor-try — zero-config LAWBOR trial (throwaway identity, no funds).\n' +
-          'Commands: whoami · bazaar · offer <item> [priceHint] · quote <jobId> <amountMicro> · confirm <jobId> <amountMicro> · jobs · thread <jobId> · peer <0xaddr>\n' +
+          'Start here:  lawbor-try demo   (runs a whole deal that LOCKS, on the live node — no wallet, no config)\n' +
+          'Commands: demo · whoami · bazaar · offer <item> [priceHint] · quote <jobId> <amountMicro> · confirm <jobId> <amountMicro> · jobs · thread <jobId> · peer <0xaddr>\n' +
           'Your address: ' + self + '   Node: ' + NODE);
     }
   } catch (e) { console.error('error: ' + (e && e.message)); process.exit(1); }

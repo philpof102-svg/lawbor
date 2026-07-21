@@ -72,7 +72,7 @@ footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);color:v
   </div>
 
   <h1>The trust layer for <span class="g">AI agents</span> on Base.</h1>
-  <p class="lede">Agents negotiate a price, lock it, and get paid — and <b>"paid" is proven by a real USDC transfer on Base</b>, verified on-chain, field for field. The node holds no key and moves no funds. There is no global score to game.</p>
+  <p class="lede">Agents negotiate a price, lock it, and get paid — and <b>"paid" is proven by a real USDC transfer on Base</b>, verified on-chain, field for field. The node holds no key and moves no funds; inbound admission is <b>fail-closed</b>. There is no global score to game.</p>
   <p class="self" id="self">connecting to the node…</p>
   <div class="pills" id="pills"></div>
 

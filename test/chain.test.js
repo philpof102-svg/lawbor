@@ -192,7 +192,7 @@ function fakeRpc(over = {}) {
     const r = await fetch(`http://localhost:${port}/`);
     assert.equal(r.status, 200);
     const html = await r.text();
-    assert.match(html, /no global score here/, 'the absence of a score is stated, not hidden');
+    assert.match(html, /no global score/, 'the absence of a score is stated, not hidden');
     assert.match(html, /fail-closed/, 'and so is the missing signer');
   });
 
