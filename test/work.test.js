@@ -787,5 +787,62 @@ t('confirm gating: owner-only, and only when a price is actually on the table', 
   assert.throws(() => buildWork('confirm', { jobId: 'o1', amountMicro: '0' }), /amountMicro/);
 });
 
+// ---- delist: the owner withdraws a listing; the board drops it, the log keeps it ----------------
+console.log('\nLAWBOR work — delist (cancel on an offer; found by the lifecycle audit: offers were IMMORTAL):');
+
+t('the OWNER cancelling their offer delists it (state delisted, cancelled recorded)', () => {
+  const j = foldThread([
+    row(REQ, W1, buildWork('offer', { jobId: 'd1', item: 'thing', price: '5000000' })),
+    row(REQ, W1, buildWork('cancel', { jobId: 'd1', reason: 'sold elsewhere' })),
+  ]).get('d1');
+  assert.equal(j.state, 'delisted');
+  assert.equal(j.cancelled.reason, 'sold elsewhere');
+});
+
+t('a NON-owner cancel does not delist (fold ignores it; mayApply refuses it)', () => {
+  const msgs = [row(REQ, W1, buildWork('offer', { jobId: 'd2', item: 'thing' }))];
+  const j0 = foldThread(msgs.concat(row(W1, REQ, buildWork('cancel', { jobId: 'd2' })))).get('d2');
+  assert.equal(j0.state, 'offered', 'a stranger cannot delist someone else\'s listing');
+  assert.equal(mayApply(j0, 'cancel', W1).ok, false);
+  assert.equal(mayApply(j0, 'cancel', REQ).ok, true, 'the owner may delist their live listing');
+});
+
+t('a delisted offer stops negotiating: later quotes/confirms are ignored, mayApply refuses', () => {
+  const j = foldThread([
+    row(REQ, W1, buildWork('offer', { jobId: 'd3', item: 'thing' })),
+    row(REQ, W1, buildWork('cancel', { jobId: 'd3' })),
+    row(W1, REQ, buildWork('quote', { jobId: 'd3', amountMicro: '4000000' })),
+  ]).get('d3');
+  assert.equal(j.state, 'delisted');
+  assert.equal(j.quotes.length, 0, 'a quote after delist does not accumulate');
+  assert.equal(mayApply(j, 'quote', W1).ok, false);
+  assert.equal(mayApply(j, 'cancel', REQ).ok, false, 'cannot delist twice');
+});
+
+t('order-independence: delist folds the same whatever the arrival order', () => {
+  const a = [
+    row(REQ, W1, buildWork('offer', { jobId: 'd4', item: 'thing' })),
+    row(W1, REQ, buildWork('quote', { jobId: 'd4', amountMicro: '2000000' })),
+    row(REQ, W1, buildWork('cancel', { jobId: 'd4' })),
+  ];
+  const s1 = foldThread(a).get('d4');
+  const s2 = foldThread([a[2], a[0], a[1]]).get('d4');
+  assert.equal(s1.state, 'delisted');
+  assert.equal(s2.state, s1.state, 'same state from a different fold order');
+});
+
+t('a plain JOB cancel is unchanged (open → cancelled), and an awarded job still cannot be cancelled', () => {
+  const j = foldThread([
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'd5', task: 't' })),
+    row(REQ, W1, buildWork('cancel', { jobId: 'd5' })),
+  ]).get('d5');
+  assert.equal(j.state, 'cancelled');
+  const awarded = foldThread([
+    row(REQ, W1, buildWork('help_wanted', { jobId: 'd6', task: 't' })),
+    row(REQ, W1, buildWork('award', { jobId: 'd6', worker: W1, price: '5' })),
+  ]).get('d6');
+  assert.equal(mayApply(awarded, 'cancel', REQ).ok, false, 'awarded jobs stay uncancellable');
+});
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exitCode = fail ? 1 : 0;

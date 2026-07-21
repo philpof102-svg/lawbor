@@ -18,6 +18,7 @@
  *   offer  <item> [priceHint]       list an offer; prints its jobId
  *   quote  <jobId> <amountMicro>    send a structured price (USDC micro-units; 5000000 = 5 USDC)
  *   confirm <jobId> <amountMicro>   (owner) LOCK the agreed price
+ *   delist <jobId>                  (owner) withdraw your listing from the public board
  *   jobs                            jobs the node has folded
  *   thread <jobId>                  the whole conversation for a job (chat + haggle + deal state)
  *   peer   <0xaddr>                 your whole relationship with an address
@@ -107,6 +108,16 @@ const out = (o) => console.log(JSON.stringify(o, null, 2));
         }
         return out({ agreedPrice: (j && j.agreedPrice) || null, note });
       }
+      case 'delist': {
+        // The owner withdraws their listing from the public board (found by the lifecycle audit:
+        // offers used to be IMMORTAL — every test listing polluted the board forever). The log keeps
+        // the job (state 'delisted', never erased); only the board drops it.
+        if (!args[0]) throw new Error('usage: delist <jobId>');
+        const r = await sendWork(buildWork('cancel', { jobId: args[0], reason: args[1] || 'delisted by owner' }), args[0]);
+        const j = (await get('/jobs')).jobs.find((x) => x.jobId === args[0]);
+        return out({ action: r.body.action, state: (j && j.state) || null,
+          note: j && j.state === 'delisted' ? 'DELISTED — off the board; the log keeps the history' : 'not delisted (are you the owner? was it still offered?)' });
+      }
       case 'demo': {
         // ONE command, zero config, that actually LOCKS a deal on the LIVE public node — the honest
         // "it works" proof. A deal needs TWO parties: agreedPrice derives only when the OWNER and a
@@ -136,6 +147,10 @@ const out = (o) => console.log(JSON.stringify(o, null, 2));
         const j = (await get('/jobs')).jobs.find((x) => x.jobId === jobId);   // node's own DERIVED state — the fold every peer computes
         const locked = !!(j && j.agreedPrice && j.agreedPrice.accepted);
         console.log('\n  node-derived state → ' + JSON.stringify({ jobId, agreedPrice: (j && j.agreedPrice) || null }));
+        // leave the public board CLEAN: the demo delists its own listing (the log keeps the history).
+        // Without this every demo run added a permanent junk offer to the board strangers browse.
+        step(5, 'seller DELISTS the demo offer — the board stays clean, the log keeps the deal');
+        await send(seller, buildWork('cancel', { jobId, reason: 'demo over — delisted' }));
         console.log('\n  ' + (locked
           ? '✅ LOCKED — the deal is sealed at 4.00 USDC, verified by the public node. No wallet, no config.'
           : '⚠️  not locked — the node may still be folding; re-run `lawbor-try thread ' + jobId + '`.'));
@@ -145,7 +160,7 @@ const out = (o) => console.log(JSON.stringify(o, null, 2));
       default:
         console.log('lawbor-try — zero-config LAWBOR trial (throwaway identity, no funds).\n' +
           'Start here:  lawbor-try demo   (runs a whole deal that LOCKS, on the live node — no wallet, no config)\n' +
-          'Commands: demo · whoami · bazaar · offer <item> [priceHint] · quote <jobId> <amountMicro> · confirm <jobId> <amountMicro> · jobs · thread <jobId> · peer <0xaddr>\n' +
+          'Commands: demo · whoami · bazaar · offer <item> [priceHint] · quote <jobId> <amountMicro> · confirm <jobId> <amountMicro> · delist <jobId> · jobs · thread <jobId> · peer <0xaddr>\n' +
           'Your address: ' + self + '   Node: ' + NODE);
     }
   } catch (e) { console.error('error: ' + (e && e.message)); process.exit(1); }

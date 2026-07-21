@@ -858,7 +858,8 @@ function build(deps = {}) {
         const zc = creditFor(node.self, work.settlementsFrom(zMsgs, foldOpts), { returnFlow: deps.returnFlow || null });
         const of = q.get('of') ? String(q.get('of')).toLowerCase() : null;
         const rawOffers = [...work.foldThread(zMsgs, foldOpts).values()]
-          .filter((j) => j.isOffer && (!of || j.requester === of))
+          // delisted offers leave the BOARD but stay in the log (/jobs) — withdrawn, never erased
+          .filter((j) => j.isOffer && j.state === 'offered' && (!of || j.requester === of))
           .sort((a, b) => b.at - a.at);
         // ORACLE LENS on the board — the same two-lens composition lawbor_vet uses,
         // now per offer. Bounded: dedupe sellers, cap the lookups, cache 60s, and

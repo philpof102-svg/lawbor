@@ -150,7 +150,8 @@ async function dispatch(msg, deps = {}) {
           const { blocked: zB } = node.store.control();
           const zMsgs = node.store.all().filter((m) => !zB.has(String(m.from).toLowerCase()));
           if (typeof deps.resolveFacts === 'function') await deps.resolveFacts(zMsgs);
-          const zJobs = [...work.foldThread(zMsgs, { txFacts: deps.txFacts || null }).values()].filter((j) => j.isOffer);
+          // delisted offers leave the BOARD but stay in the log (lawbor_jobs) — withdrawn, never erased
+          const zJobs = [...work.foldThread(zMsgs, { txFacts: deps.txFacts || null }).values()].filter((j) => j.isOffer && j.state === 'offered');
           const zc = creditFor(node.self, work.settlementsFrom(zMsgs, { txFacts: deps.txFacts || null }), { returnFlow: deps.returnFlow || null });
           const ofFilter = a.of ? String(a.of).toLowerCase() : null;
           const shown = zJobs.filter((j) => !ofFilter || j.requester === ofFilter).sort((x, y) => y.at - x.at);
