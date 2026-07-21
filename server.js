@@ -37,6 +37,7 @@ const beat = require('./lib/beat');
 const work = require('./lib/work');
 const { createChainReader } = require('./lib/chain');
 const { creditFor, explainCredit } = require('./lib/credit');
+const { detectRings } = require('./lib/rings');
 // OPTIONAL signature verifier (viem, lazily loaded). Absent ⇒ the relay stays fail-closed on inbound
 // peers, which /health reports. See lib/verify.js for why the crypto is not hand-rolled here.
 const { createVerifier, createAuthVerifier, verifierStatus, keyProofMessage } = require('./lib/verify');
@@ -974,6 +975,16 @@ function build(deps = {}) {
           limits: c.limits.concat(RATING_LIMITS),
         });
       }
+      if (req.method === 'GET' && url === '/rings') {
+        // Structural anti-farming lens: short settlement cycles (money that came back). Advisory only.
+        const { blocked: rBlocked } = store.control();
+        const msgs = store.all().filter((m) => !rBlocked.has(String(m.from).toLowerCase()));
+        await resolveFacts(msgs);
+        const edges = work.settlementsFrom(msgs, foldOpts);
+        const r = detectRings(edges);
+        r.verifiesSettlements = (await settlementStatus()).verifying;
+        return json(res, 200, r);
+      }
       if (req.method === 'GET' && url === '/why') {
         // WHY the standing is what it is — the rating made auditable for one subject, provable per txHash.
         const of = q.get('of');
@@ -1059,7 +1070,7 @@ function build(deps = {}) {
          * a local operator is unaffected and the internet gets a read-only surface — which is exactly
          * what this deployment claims to be. Default-deny: a tool not on the read list is a write. */
         const READ_TOOLS = new Set(['lawbor_whoami', 'lawbor_inbox', 'lawbor_watch', 'lawbor_thread',
-          'lawbor_requests', 'lawbor_jobs', 'lawbor_graph', 'lawbor_wanted', 'lawbor_credit', 'lawbor_why', 'lawbor_bazaar', 'lawbor_vet', 'lawbor_peer']);
+          'lawbor_requests', 'lawbor_jobs', 'lawbor_graph', 'lawbor_wanted', 'lawbor_credit', 'lawbor_why', 'lawbor_rings', 'lawbor_bazaar', 'lawbor_vet', 'lawbor_peer']);
         if (msg && msg.method === 'tools/call' && !READ_TOOLS.has(((msg.params || {}).name) || '')) {
           if (!(await operatorOk(req))) {
             return json(res, 200, { jsonrpc: '2.0', id: msg.id === undefined ? null : msg.id,
