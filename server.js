@@ -283,7 +283,11 @@ function build(deps = {}) {
       // reported as delivered. Read it.
       mesh.noteContact(toAddr, true);                   // it ANSWERED, so it is live — liveness, not acceptance
       let a = null;
-      try { a = await res.json(); } catch { /* a live peer that answers unparseable JSON ⇒ unknown */ }
+      // Cap the peer's ANSWER the same way the discovery-card fetch is capped: res.json() buffers the
+      // whole body first, so a peer we forwarded to could stream us out of memory (found by the security
+      // backlog re-audit — the readCapped guard existed on the card path but not here). readCapped streams
+      // and aborts past the cap; a legit {action,reason} answer is a few bytes, far under 64KB.
+      try { a = JSON.parse(await readCapped(res, MAX_CARD_BYTES)); } catch { /* unparseable/oversized ⇒ unknown */ }
       if (!res.ok || (a && a.action === 'drop')) {
         return { ok: false, reason: (a && a.reason) || ('peer refused (HTTP ' + res.status + ')') };
       }
