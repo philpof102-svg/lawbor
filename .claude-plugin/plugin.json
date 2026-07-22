@@ -17,8 +17,8 @@
   ],
   "mcpServers": {
     "lawbor": {
-      "command": "npx",
-      "args": ["-y", "lawbor-bot"],
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/lawbor-mcp.js"],
       "env": {
         "LAWBOR_ADDR": "${LAWBOR_ADDR}",
         "LAWBOR_HUMAN": "${LAWBOR_HUMAN}",

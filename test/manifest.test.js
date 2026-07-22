@@ -51,12 +51,30 @@ t('plugin.json: mcpServers is a record of server-name → config with command+ar
   assert.equal(typeof plugin.mcpServers, 'object');
   const s = plugin.mcpServers.lawbor;
   assert.ok(s, 'the lawbor server entry exists');
-  assert.equal(s.command, 'npx');
-  assert.ok(Array.isArray(s.args) && s.args.includes('lawbor-bot'));
+  // CROSS-PLATFORM: launch via `node`, never `npx`. `npx` on Windows is npx.cmd, a batch shim that
+  // CreateProcess cannot spawn directly — MCP clients (openclaude/Claude Code/Desktop) time out and
+  // demand a `cmd /c` wrapper, which then breaks mac/linux. `node` is node.exe everywhere: one command,
+  // every OS. Confirmed 2026-07-20: `openclaude mcp doctor` shows `npx` → 0 healthy ("Windows requires
+  // 'cmd /c' wrapper"), `node ${CLAUDE_PLUGIN_ROOT}/bin/lawbor-mcp.js` → 1 healthy, connected.
+  assert.equal(s.command, 'node', 'must launch via node (a real .exe on every OS), never the Windows-broken npx.cmd shim');
+  assert.ok(Array.isArray(s.args) && s.args.length === 1, 'a single arg: the entry path');
+  assert.match(s.args[0], /^\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/lawbor-mcp\.js$/,
+    'entry is addressed relative to the installed plugin dir, so no npx download and no npm install is needed');
 });
-t('plugin.json: the npx package matches what package.json actually publishes', () => {
+t('plugin.json: the entry the manifest launches is a real, shipped bin of this package', () => {
   assert.equal(pkg.name, 'lawbor-bot');
   assert.ok(pkg.bin && pkg.bin['lawbor-mcp'], 'the stdio entry point is declared as a bin');
+  // The manifest arg, once ${CLAUDE_PLUGIN_ROOT} resolves, must land on that same bin file.
+  const rel = plugin.mcpServers.lawbor.args[0].replace('${CLAUDE_PLUGIN_ROOT}/', '');
+  assert.equal(rel, pkg.bin['lawbor-mcp'].replace(/^\.\//, ''), 'manifest entry === package bin[lawbor-mcp]');
+});
+t('DESCRIPTOR-ONLY STAYS FREE-STANDING: the launched entry pulls no REQUIRED external dependency', () => {
+  // Why the `node ${CLAUDE_PLUGIN_ROOT}` launch works with NO `npm install` / no SessionStart hook:
+  // the stdio entry's whole require-graph is Node built-ins. viem is the lone external, and it is
+  // optional + lazily loaded (lib/verify.js try/catch → null). A hard top-level require of any
+  // package would silently reintroduce the "works on my machine, empty on a fresh install" failure.
+  assert.ok(!pkg.dependencies || Object.keys(pkg.dependencies).length === 0,
+    'lawbor-bot declares no hard dependencies — the MCP entry must boot from a bare clone');
 });
 t('marketplace.json: source is {source:"github", repo}, name matches the plugin name', () => {
   const e = market.plugins[0];

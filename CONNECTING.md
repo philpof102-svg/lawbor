@@ -149,6 +149,35 @@ LAWBOR_NODE_URL=http://127.0.0.1:4830 LAWBOR_VIEW=requests npm run desktop
 
 LAWBOR ships a stdio MCP server (the `lawbor-bot` package), so any MCP-speaking agent — [openclaude](https://openclaude.gitlawb.com/), Claude Code, Claude Desktop — can load its 25 tools (`lawbor_bazaar`, `lawbor_offer`, `lawbor_quote`, `lawbor_confirm`, `lawbor_settle`, `lawbor_peer`, `lawbor_credit`, …) straight into its agent loop.
 
+### The easy way: install the plugin (cross-platform, no per-OS flags)
+
+The marketplace plugin (`.claude-plugin/plugin.json`) launches the server with
+`node ${CLAUDE_PLUGIN_ROOT}/bin/lawbor-mcp.js`. Because the command is **`node`** (a real executable on
+every OS) and not `npx` (whose Windows form `npx.cmd` a client can't spawn directly), the same manifest
+works on Windows, macOS and Linux with **no `cmd /c`** — and there is nothing to download or `npm install`,
+since the entry's whole require-graph is Node built-ins (`viem` is optional and lazily loaded). Add the
+marketplace once, then install:
+
+```bash
+openclaude plugin marketplace add philpof102-svg/lawbor
+openclaude plugin install lawbor        # Windows, macOS, Linux — identical
+```
+
+> The **command** in the manifest is the cross-platform part proven here (`openclaude mcp doctor` →
+> connected on Windows, no `cmd /c`). Recent openclaude (0.24.0) additionally wants a top-level `owner`
+> object in `marketplace.json` before `plugin install` will pass validation — add it if `install` complains.
+
+### The manual way: add the server by hand
+
+If you cloned the repo (step 0 above), point `node` straight at the bundled entry — one command, every OS:
+
+```bash
+openclaude mcp add lawbor -- node ./bin/lawbor-mcp.js     # run from the repo root
+```
+
+Adding the **published package** by hand (no clone) is the one path that still needs a per-OS spawn, because
+the npm bin is `npx`/`.cmd` on Windows:
+
 ```bash
 # macOS / Linux
 openclaude mcp add lawbor -- npx -y lawbor-bot
@@ -164,11 +193,19 @@ Verify the agent actually connected and discovered the tools — no model/API ke
 openclaude mcp doctor lawbor        # → "Live check: connected", 1 healthy, 0 blocking
 ```
 
+> **openclaude on Windows** spawns stdio MCP servers through Git Bash, so if `mcp doctor` prints only
+> warnings and exits without a report, set `CLAUDE_CODE_GIT_BASH_PATH` to your `bash.exe`
+> (e.g. `C:\Program Files\Git\bin\bash.exe`) and re-run. This is an openclaude prerequisite for *any*
+> stdio server, not specific to LAWBOR.
+
 Same JSON works for Claude Code / Claude Desktop (`mcpServers.lawbor`). The server is **descriptor-only**: it holds no key and signs nothing, so an agent using these tools negotiates and settles by returning EIP-712 descriptors its own wallet signs — it can never move your funds.
 
 ## Troubleshooting
 
-- **`connection timed out` when an MCP client spawns `lawbor`** → on Windows use `cmd /c lawbor-mcp` (see above), and install `lawbor-bot` globally first so the first spawn doesn't wait on an `npx` download.
+- **`connection timed out` when an MCP client spawns `lawbor`** → you added the **package** by hand with a
+  bare `npx` on Windows. Either install the **plugin** (`openclaude plugin install lawbor` — it launches via
+  `node` and sidesteps this entirely), point `node` at a clone (`node ./bin/lawbor-mcp.js`), or use
+  `cmd /c lawbor-mcp` with `lawbor-bot` installed globally so the first spawn doesn't wait on an `npx` download.
 - **`/peers` returns `ok:false, reason: private / ... refused`** → you forgot `LAWBOR_ALLOW_PRIVATE=1`
   on the node you POSTed to.
 - **`discovery card unreachable`** → a firewall is blocking port 4830. Allow it, or check the IP.
