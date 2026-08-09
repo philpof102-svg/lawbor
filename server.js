@@ -26,6 +26,7 @@
  */
 const http = require('http');
 const fs = require('fs');
+const { planAdmissionWiring, messageDeRefus } = require('./lib/admission-wiring');
 const path = require('path');
 const dns = require('dns').promises;
 const { createNode } = require('./lib/node');
@@ -1156,7 +1157,48 @@ module.exports = { build, mainstreetPreflight, _resetPreflightCache: () => _pfCa
 if (require.main === module) {
   // ship the built-in free apps by default on a standalone node: the org-graph viewer, a node digest,
   // and a stateless two-agent game (proof that you ship on it — see PLATFORM.md).
-  const { server, node, startHeartbeat } = build({ apps: [
+  /* ── L'ORACLE D'ADMISSION EST REMPLAÇABLE ICI, ET C'ÉTAIT LE MAILLON MANQUANT ────────────────────
+   * `build(deps)` accepte `deps.preflight` depuis toujours — c'est ce qui fait basculer
+   * `admissionOracle.operatedByUs` à false. Mais cette ligne appelait `build({ apps })` sans jamais en
+   * passer un, et `lawbor-node` EST ce fichier: les modules d'admission étaient donc inatteignables
+   * pour quiconque lance le binaire livré. Une couture que personne ne peut atteindre est une
+   * intention, pas une couture.
+   *
+   * ⛔ INERTE sans `LAWBOR_ADMISSION`, et REFUS DE DÉMARRER si l'opérateur le pose sans le reste: sans
+   * magasin d'attestations OU sans vérificateur de signatures, le preflight refuse TOUT LE MONDE, et
+   * un nœud qui démarre en n'admettant plus personne a l'air vivant — bien pire qu'un arrêt franc. */
+  const plan = planAdmissionWiring(process.env);
+  if (!plan.ok) { console.error(messageDeRefus(plan)); process.exit(2); }
+  const depsAdmission = {};
+  if (plan.mode === 'gitlawb') {
+    const fs = require('node:fs');
+    const { makeGitlawbPreflight } = require('./lib/admission-gitlawb');
+    const { makeLireStanding } = require('./lib/gitlawb-standing');
+    const { makeLireLiaison } = require('./lib/did-binding');
+    const { execFile } = require('node:child_process');
+    /* Le magasin le plus simple qui soit: un JSONL d'attestations, relu a chaque appel. Il ne tranche
+     * PAS qui les depose ni comment elles circulent — ca reste une decision d'operateur. */
+    const magasin = async (addr) => {
+      const a = String(addr || '').toLowerCase();
+      let brut; try { brut = fs.readFileSync(plan.bindings, 'utf8'); } catch { return null; }
+      for (const l of brut.split(/\r?\n/)) {
+        if (!l.trim()) continue;
+        let j; try { j = JSON.parse(l); } catch { continue; }
+        if (j && typeof j.address === 'string' && j.address.toLowerCase() === a) return j;
+      }
+      return null;
+    };
+    depsAdmission.preflight = makeGitlawbPreflight({
+      lireLiaison: makeLireLiaison({ magasin, verifier: require(plan.verifier) }),
+      lireStanding: makeLireStanding({ node: plan.node,
+        lancer: (args) => new Promise((res, rej) => execFile('gl', args, { timeout: 20000 },
+          (e, out) => (e ? rej(e) : res(String(out))))) }),
+      minScore: Number(process.env.LAWBOR_MIN_SCORE) || 40,
+    });
+  }
+  console.log('LAWBOR admission: ' + plan.raison);
+
+  const { server, node, startHeartbeat } = build({ ...depsAdmission, apps: [
     require('./apps/orggraph'), require('./apps/standup'), require('./apps/tictactoe'),
     require('./apps/premium-feed'),   // PREMIUM: refused (fail-closed) until LAWBOR_PAY_TO + a verifier are wired
   ] });
