@@ -34,8 +34,8 @@ const ouiVerif = () => true;
 
 /* ── 1. LE REFUS QUI PROTÈGE TOUT LE RESTE ────────────────────────────────────────────────────────── */
 
-t('★ SANS verificateur: structure parfaite, mais bound FAUX et la raison le dit', () => {
-  const r = jugerLiaison(OK, { now: 1 });
+t('★ SANS verificateur: structure parfaite, mais bound FAUX et la raison le dit', async () => {
+  const r = await jugerLiaison(OK, { now: 1 });
   assert.strictEqual(r.bound, false, 'une structure conforme ne prouve RIEN');
   assert.ok(/pretention, pas une liaison/.test(r.raison), r.raison);
   /* Le DID et le message restent rendus: on refuse en INFORMANT, pas en effacant. */
@@ -43,15 +43,15 @@ t('★ SANS verificateur: structure parfaite, mais bound FAUX et la raison le di
   assert.ok(typeof r.message === 'string' && r.message.length > 40);
 });
 
-t('★ TEMOIN — avec un verificateur qui dit oui, bound vaut VRAI', () => {
-  const r = jugerLiaison(OK, { now: 1, verifier: ouiVerif });
+t('★ TEMOIN — avec un verificateur qui dit oui, bound vaut VRAI', async () => {
+  const r = await jugerLiaison(OK, { now: 1, verifier: ouiVerif });
   assert.strictEqual(r.bound, true, 'sans ce cas, un module qui refuse TOUT passerait tous les autres');
   assert.strictEqual(r.did, DID);
 });
 
-t('★ signatures invalides et verificateur EN PANNE ne se lisent pas pareil', () => {
-  const invalide = jugerLiaison(OK, { now: 1, verifier: () => false });
-  const panne = jugerLiaison(OK, { now: 1, verifier: () => { throw new Error('libsecp absente'); } });
+t('★ signatures invalides et verificateur EN PANNE ne se lisent pas pareil', async () => {
+  const invalide = await jugerLiaison(OK, { now: 1, verifier: () => false });
+  const panne = await jugerLiaison(OK, { now: 1, verifier: () => { throw new Error('libsecp absente'); } });
   assert.strictEqual(invalide.bound, false);
   assert.strictEqual(panne.bound, false);
   assert.ok(/INVALIDES/.test(invalide.raison), invalide.raison);
@@ -61,22 +61,22 @@ t('★ signatures invalides et verificateur EN PANNE ne se lisent pas pareil', (
 
 /* ── 2. LES STRUCTURES QUI NE PASSENT PAS ─────────────────────────────────────────────────────────── */
 
-t('★ sans NONCE: refus — une attestation signee une fois se rejouerait indefiniment', () => {
-  const r = jugerLiaison({ ...OK, nonce: '' }, { now: 1, verifier: ouiVerif });
+t('★ sans NONCE: refus — une attestation signee une fois se rejouerait indefiniment', async () => {
+  const r = await jugerLiaison({ ...OK, nonce: '' }, { now: 1, verifier: ouiVerif });
   assert.strictEqual(r.bound, false);
   assert.ok(/rejouable/.test(r.raison), r.raison);
 });
 
-t('DID ou adresse mal formes: refus, meme avec un verificateur complaisant', () => {
+t('DID ou adresse mal formes: refus, meme avec un verificateur complaisant', async () => {
   for (const bad of [{ did: 'pas-un-did' }, { did: '' }, { address: '0xzz' }, { address: 'coucou' }]) {
-    const r = jugerLiaison({ ...OK, ...bad }, { now: 1, verifier: ouiVerif });
+    const r = await jugerLiaison({ ...OK, ...bad }, { now: 1, verifier: ouiVerif });
     assert.strictEqual(r.bound, false, JSON.stringify(bad));
   }
 });
 
-t('aucune attestation du tout: refus qui le DIT', () => {
+t('aucune attestation du tout: refus qui le DIT', async () => {
   for (const v of [null, undefined, 'texte', 42]) {
-    const r = jugerLiaison(v, { now: 1, verifier: ouiVerif });
+    const r = await jugerLiaison(v, { now: 1, verifier: ouiVerif });
     assert.strictEqual(r.bound, false);
     assert.ok(/aucune attestation/.test(r.raison));
   }
@@ -84,26 +84,26 @@ t('aucune attestation du tout: refus qui le DIT', () => {
 
 /* ── 3. L'EXPIRATION EST UNE VRAIE VÉRIFICATION ───────────────────────────────────────────────────── */
 
-t('★ une attestation EXPIREE est refusee MEME signee', () => {
-  const r = jugerLiaison({ ...OK, expiry: 1000 }, { now: 1001, verifier: ouiVerif });
+t('★ une attestation EXPIREE est refusee MEME signee', async () => {
+  const r = await jugerLiaison({ ...OK, expiry: 1000 }, { now: 1001, verifier: ouiVerif });
   assert.strictEqual(r.bound, false, 'sinon une cle compromise un jour donne un acces permanent');
   assert.ok(/EXPIREE/.test(r.raison), r.raison);
 });
 
-t('★ le cas OPPOSE: la meme attestation AVANT son expiration passe', () => {
-  const r = jugerLiaison({ ...OK, expiry: 1000 }, { now: 999, verifier: ouiVerif });
+t('★ le cas OPPOSE: la meme attestation AVANT son expiration passe', async () => {
+  const r = await jugerLiaison({ ...OK, expiry: 1000 }, { now: 999, verifier: ouiVerif });
   assert.strictEqual(r.bound, true, 'temoin: sinon `expiry` refuserait tout le monde et le test ci-dessus');
 });
 
-t('★ « pas d expiration » est un cas DISTINCT, signale et non silencieux', () => {
-  const r = jugerLiaison({ ...OK, expiry: 0 }, { now: 1, verifier: ouiVerif });
+t('★ « pas d expiration » est un cas DISTINCT, signale et non silencieux', async () => {
+  const r = await jugerLiaison({ ...OK, expiry: 0 }, { now: 1, verifier: ouiVerif });
   assert.strictEqual(r.bound, true, 'on ne l interdit pas...');
   assert.ok(/SANS DATE D EXPIRATION/.test(r.raison), '...mais l operateur doit le VOIR: ' + r.raison);
 });
 
 /* ── 4. LE MESSAGE CANONIQUE EST UN CONTRAT ───────────────────────────────────────────────────────── */
 
-t('★ le message est STABLE et discrimine — un tiers doit le reconstruire a l identique', () => {
+t('★ le message est STABLE et discrimine — un tiers doit le reconstruire a l identique', async () => {
   const a = messageDeLiaison({ did: DID, address: ADR, nonce: 'n-1' });
   assert.strictEqual(a, messageDeLiaison({ did: DID, address: ADR, nonce: 'n-1' }), 'doit etre deterministe');
   /* Changer n IMPORTE QUEL champ doit changer le message, sinon deux liaisons distinctes partageraient
@@ -115,7 +115,7 @@ t('★ le message est STABLE et discrimine — un tiers doit le reconstruire a l
   }
 });
 
-t("l adresse est normalisee en minuscules — sinon la casse changerait le message a signer", () => {
+t("l adresse est normalisee en minuscules — sinon la casse changerait le message a signer", async () => {
   const bas = messageDeLiaison({ did: DID, address: ADR, nonce: 'n' });
   const haut = messageDeLiaison({ did: DID, address: ADR.toUpperCase().replace('0X', '0x'), nonce: 'n' });
   assert.strictEqual(bas, haut, 'deux ecritures de la MEME adresse doivent donner le MEME message');
@@ -154,7 +154,7 @@ t('★ une panne du MAGASIN remonte — elle ne devient jamais « pas de liaison
     'rendre bound:false sur une panne condamnerait un agent legitime en silence');
 });
 
-t('sans magasin, le module REFUSE de se construire', () => {
+t('sans magasin, le module REFUSE de se construire', async () => {
   assert.throws(() => makeLireLiaison({}), /magasin.*requis/i);
 });
 

@@ -27,15 +27,34 @@
  * seule des deux clés a signé, n'importe qui pourrait revendiquer l'adresse d'un autre en signant de
  * son côté. Rendre `true` ici serait exactement l'usurpation que toute la chaîne existe pour empêcher.
  *
- * ⚠️ POUR ALLER JUSQU'AU BOUT, l'opérateur passe un `ecrecover` — une ligne avec `viem`, `ethers` ou
- * `@noble/curves`. `lawbor` ne l'embarque pas parce qu'il a ZÉRO dépendance par choix, et
- * `lib/relay.js` avait déjà tranché ce compromis en injectant la vérification d'enveloppe.
+ * ⛔ CORRECTION DU 2026-08-09 — LA RAISON ÉCRITE ICI ÉTAIT FAUSSE, ET ELLE COÛTAIT LA FONCTIONNALITÉ.
+ * Ce fichier disait: « `lawbor` n'embarque pas d'`ecrecover` parce qu'il a ZÉRO dépendance par choix ».
+ * Mesuré: `package.json` a bien `dependencies: {}` — mais aussi
+ * **`optionalDependencies: { viem: "^2.21.0" }`**, que npm installe, et `lib/verify.js` est déjà un
+ * adaptateur paresseux dessus. Mieux: `createAuthVerifier()` y répond EXACTEMENT à la question que la
+ * moitié Base pose — « cette adresse a-t-elle signé cette chaîne » (EIP-191, `verifyMessage`).
+ *
+ * 💎 Le helper existait, et ce fichier — l'appelant à fort enjeu — ne l'appelait pas. La conséquence
+ * n'était pas théorique: la moitié Base était déclarée impossible et portée sur la liste des décisions
+ * de l'opérateur, alors qu'elle était déjà tranchée par le dépôt.
+ *
+ * ⛔ ET LE DÉFAUT SE CACHAIT DERRIÈRE UN REFUS. `jugerLiaison` faisait `verifier(...) === true` en
+ * SYNCHRONE; `createAuthVerifier` est `async`. Une Promise n'est jamais `=== true`, donc brancher le
+ * seul ecrecover disponible aurait produit un refus PERMANENT et SILENCIEUX. Fail-closed, donc pas un
+ * trou de sécurité — mais une porte qui ne s'ouvre jamais, invisible à tout test, parce qu'un refus
+ * ressemble à un refus. Le maillon est désormais `async`, et il accepte toujours les vérificateurs
+ * synchrones (`await` sur une valeur rend la valeur).
+ *
+ * ⚠️ LA PROPRIÉTÉ FAIL-CLOSED EST CONSERVÉE. `viem` reste OPTIONNEL: s'il n'est pas installé,
+ * `createAuthVerifier()` rend `null`, ce module refuse comme avant, et il DIT laquelle des deux
+ * moitiés manque au lieu de rendre un `false` muet.
  *
  * USAGE:
- *   LAWBOR_BINDING_VERIFIER=./examples/binding-verifier.js      → moitié DID vérifiée, refuse ensuite
+ *   LAWBOR_BINDING_VERIFIER=./examples/binding-verifier.js   → les DEUX moitiés si viem est là
  *   ou, dans votre propre module:  module.exports = faireVerificateur({ ecrecover })
  */
 const crypto = require('node:crypto');
+const { createAuthVerifier } = require('../lib/verify');
 
 /* Le préfixe multicodec d'une clé publique Ed25519 dans un `did:key`: 0xed 0x01, puis 32 octets. */
 const PREFIXE_ED25519 = Buffer.from([0xed, 0x01]);
@@ -83,8 +102,32 @@ function cleVerifiable(brute) {
  * @param {(s:string)=>Buffer} [deps.decodeSig] décodeur de `sigDid` (hex ou base64), défaut: hex puis base64
  * @returns {(o:{message:string, attestation:object})=>boolean}
  */
+/**
+ * L'`ecrecover` que le dépôt sait déjà fournir, adapté au contrat attendu ici.
+ *
+ * `createAuthVerifier()` rend `verifyAuth({message, sig, claimed}) → {ok, signer}` ou **null** quand
+ * viem est absent. On propage ce `null`: « pas d'ecrecover » reste un état supporté, pas une panne.
+ *
+ * ⚠️ C'est une vérification CONTRE UNE ADRESSE FIXE, pas une récupération de clé. `lib/verify.js` le
+ * dit explicitement et interdit de « l'optimiser » en `recover…Address` sans garder la comparaison:
+ * une signature valide par la MAUVAISE clé doit rester refusée.
+ */
+function ecrecoverDuDepot() {
+  const verifyAuth = createAuthVerifier();
+  if (!verifyAuth) return null;                    // viem absent — le module refusera, et dira pourquoi
+  return async function ecrecover({ message, signature, address }) {
+    const r = await verifyAuth({ message, sig: signature, claimed: address });
+    return !!(r && r.ok === true);
+  };
+}
+
 function faireVerificateur(deps = {}) {
-  const { ecrecover = null, decodeSig = null } = deps;
+  /* ⚠️ `'ecrecover' in deps` PLUTÔT QU'UN DÉFAUT: un `null` EXPLICITE doit pouvoir dire « pas
+   * d'ecrecover » quoi qu'il soit installé sur la machine de test. C'est l'idiome que `lib/verify.js`
+   * emploie déjà pour viem — sans lui, le cas « moitié manquante » deviendrait intestable dès que
+   * viem est présent, c'est-à-dire précisément après ce correctif. */
+  const ecrecover = ('ecrecover' in deps) ? deps.ecrecover : ecrecoverDuDepot();
+  const { decodeSig = null } = deps;
 
   const enOctets = decodeSig || ((s) => {
     const t = String(s || '').replace(/^0x/, '');
@@ -92,7 +135,7 @@ function faireVerificateur(deps = {}) {
     return Buffer.from(String(s || ''), 'base64');
   });
 
-  return function verifier({ message, attestation }) {
+  return async function verifier({ message, attestation }) {
     const a = attestation || {};
 
     /* ── 1. LE CÔTÉ DID, VÉRIFIÉ POUR DE VRAI ─────────────────────────────────────────────────────── */
@@ -105,8 +148,10 @@ function faireVerificateur(deps = {}) {
     } catch { return false; }                       // signature illisible: refus, jamais une supposition
     if (!didOk) return false;
 
-    /* ── 2. LE CÔTÉ BASE, QU'ON NE PEUT PAS FAIRE SEUL ────────────────────────────────────────────── */
+    /* ── 2. LE CÔTÉ BASE — DÉSORMAIS FAISABLE, MAIS SEULEMENT SI viem EST LÀ ──────────────────────── */
     if (typeof ecrecover !== 'function') {
+      /* On n'arrive ici que si viem est absent (dépendance OPTIONNELLE) ou si l'appelant a passé un
+       * `ecrecover: null` explicite. Les deux sont des états supportés, et le refus reste correct. */
       /* ⛔ ICI EST TOUT L'ENJEU. La moitié DID vient de passer — la tentation est de rendre `true`.
        * Mais la liaison est BIDIRECTIONNELLE: sans la signature Base, n'importe qui possédant un DID
        * pourrait revendiquer l'adresse de quelqu'un d'autre en ne signant que de son côté. C'est
@@ -114,14 +159,19 @@ function faireVerificateur(deps = {}) {
       return false;
     }
     if (!a.sigBase || !a.address) return false;
-    try { return ecrecover({ message: String(message), signature: a.sigBase, address: a.address }) === true; }
+    /* ⛔ L'`await` EST LE CORRECTIF. Sans lui, une Promise n'est jamais `=== true` et le seul ecrecover
+     * que ce dépôt sait construire refusait TOUJOURS, en silence. */
+    try { return (await ecrecover({ message: String(message), signature: a.sigBase, address: a.address })) === true; }
     catch { return false; }                         // un ecrecover qui jette n'est pas un ecrecover qui dit oui
   };
 }
 
-/* L'export par défaut: utilisable tel quel, et il refusera tant qu'un `ecrecover` n'est pas fourni.
- * C'est voulu — un vérificateur livré « qui marche » sans vérifier la moitié Base serait un piège. */
+/* L'export par défaut vérifie désormais les DEUX moitiés quand `viem` est installé — c'est-à-dire dans
+ * toute installation normale, puisque le paquet le tire. Sans viem il refuse, exactement comme avant.
+ * ⚠️ Ce qui n'a PAS changé: il ne rend jamais `true` sur une seule moitié. La liaison est
+ * bidirectionnelle par conception, et c'est ce que les tests asservissent. */
 module.exports = faireVerificateur();
 module.exports.faireVerificateur = faireVerificateur;
+module.exports.ecrecoverDuDepot = ecrecoverDuDepot;
 module.exports.cleDepuisDid = cleDepuisDid;
 module.exports.base58Decode = base58Decode;
