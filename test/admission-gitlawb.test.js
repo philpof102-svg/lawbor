@@ -157,7 +157,61 @@ t('★ la forme rendue est celle que le relais consomme: decision === PROCEED ET
     + 'et NaN >= minScore est FAUX — la porte se fermerait en ayant l air de decider');
 });
 
-const ATTENDUS = 13;
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════
+ * LE MESSAGE QU'UN TIERS REFUSÉ REÇOIT — il n'était couvert par AUCUN test.
+ *
+ * Mesuré le 2026-08-09: avec un preflight gitlawb injecté, un expéditeur refusé recevait
+ * « sender not PROCEED on MainStreet (NO-BINDING) ». Or `preflight` est INJECTABLE par conception —
+ * c'est tout l'intérêt de `deps.preflight`, et c'est ce qui permet de remplacer notre oracle. Le
+ * message nommait donc un service qui n'avait rien décidé, et l'expéditeur serait allé déboguer là-bas.
+ *
+ * ⛔ Et rien ne l'attrapait: la phrase servie à un tiers pouvait dire n'importe quoi. C'est le pire
+ * genre d'angle mort — pas une absence de code, une absence de REGARD.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════════ */
+const { createRelay } = require('../lib/relay');
+
+const relaisAvec = (preflight) => createRelay({
+  self: '0x' + '9'.repeat(40), preflight, minScore: 40, allowUnauthenticated: true,
+});
+/* ⛔ L'enveloppe vient du CONSTRUCTEUR CANONIQUE, pas d'un objet fabrique a la main. Mon premier jet
+ * en bricolait un et se faisait rejeter par `validateEnvelope` (« unknown envelope version ») AVANT
+ * d'atteindre le preflight — le test n'aurait alors rien mesure du chemin qu'il pretend couvrir. */
+const { buildEnvelope } = require('../lib/envelope');
+const enveloppe = () => buildEnvelope({ from: '0x' + '1'.repeat(40), to: '0x' + '9'.repeat(40),
+  body: 'bonjour', ts: 1 }).envelope;   // ⛔ buildEnvelope rend { envelope, sign }, pas l enveloppe
+
+t('★ le refus ne nomme AUCUN oracle en dur, et cite la source qui a repondu', async () => {
+  const pf = makeGitlawbPreflight({
+    lireLiaison: async () => LIE,
+    lireStanding: async () => ({ trust: 0.01, source: 'https://un-noeud-tiers' }),
+    minScore: 40,
+  });
+  const r = await relaisAvec(pf).accept(enveloppe());
+  assert.strictEqual(r.action, 'drop', 'un standing de 0,01 doit etre refuse: ' + JSON.stringify(r));
+  assert.ok(!/MainStreet/i.test(r.reason),
+    'le refus nomme un oracle qui n a rien decide: ' + r.reason);
+  assert.ok(/un-noeud-tiers/.test(r.reason),
+    'il doit citer la source QUI A REPONDU, sinon l expediteur ne sait pas ou regarder: ' + r.reason);
+  assert.ok(/BELOW-FLOOR/.test(r.reason), 'et porter la decision: ' + r.reason);
+});
+
+t('★ sans source declaree, le refus reste MUET sur l identite plutot que d en inventer une', async () => {
+  /* `NO-BINDING` est decide AVANT tout appel reseau, donc aucune source n a repondu. Nommer un noeud
+   * ici serait inventer une origine — exactement le defaut qu on vient de corriger, a l envers. */
+  const pf = makeGitlawbPreflight({
+    lireLiaison: async () => null,
+    lireStanding: async () => ({ trust: 0.9, source: 'https://jamais-interroge' }),
+    minScore: 40,
+  });
+  const r = await relaisAvec(pf).accept(enveloppe());
+  assert.strictEqual(r.action, 'drop', JSON.stringify(r));
+  assert.ok(/NO-BINDING/.test(r.reason), r.reason);
+  assert.ok(!/jamais-interroge/.test(r.reason),
+    'aucun noeud n a ete interroge: le citer serait inventer une origine — ' + r.reason);
+  assert.ok(!/MainStreet/i.test(r.reason), r.reason);
+});
+
+const ATTENDUS = 15;
 Promise.all(encours).then(() => {
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   if (pass + fail !== ATTENDUS) {
