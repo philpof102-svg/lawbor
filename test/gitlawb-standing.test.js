@@ -134,7 +134,60 @@ t('★ une panne du lanceur REMONTE — elle ne devient jamais un standing de ze
   await assert.rejects(() => lire('did:key:zA'), /introuvable/);
 });
 
-const ATTENDUS = 12;
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════
+ * ÉPINGLER L'IDENTITÉ DU NŒUD, PAS SON URL.
+ *
+ * Sondé le 2026-08-09, `https://node.gitlawb.com` publie sa propre carte: un DID `did:key:z6Mki…`, un
+ * `p2p_peer_id` libp2p, et `network: alpha`. Une URL survit à un DNS détourné, à un proxy, à un
+ * changement d'opérateur — le DID non. Dans une porte d'admission, la différence entre « je fais
+ * confiance à une adresse » et « je fais confiance à une identité » est tout le sujet.
+ *
+ * ⚠️ Ce contrôle LIT ce que le nœud déclare, il ne le PROUVE pas: le nœud annonce
+ * `http-signature-rfc9421`, donc la vérification forte serait de valider une signature contre ce DID.
+ * Les cas ci-dessous verrouillent donc surtout que l'absence de preuve soit DITE, jamais maquillée.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════════ */
+const { verifierNoeud } = require('../lib/gitlawb-standing');
+
+/* La carte REELLE du noeud public, copiee de la sonde. */
+const CARTE = Object.freeze({ auth: 'http-signature-rfc9421',
+  did: 'did:key:z6Mkicjkc95VcFx38Xg2SvFV2ENsu3dLDoWborjPGVodHXoH', identity: 'ed25519',
+  name: 'gitlawb-node', network: 'alpha', p2p_peer_id: '12D3KooWJ8FTHLfbEkXprCACu7qhBazEKzr3ber4JQ3KsGHiRHAe',
+  protocols: ['git-smart-http', 'mcp', 'libp2p'], version: '0.7.0' });
+
+t('★ un DID EPINGLE qui correspond: conforme, et le reseau est rapporte', () => {
+  const r = verifierNoeud(CARTE, { didAttendu: CARTE.did });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.did, CARTE.did);
+  assert.strictEqual(r.network, 'alpha');
+  assert.ok(/alpha/.test(r.raison), 'le reseau doit apparaitre: une decision batie dessus en herite');
+});
+
+t('★ un DID DIFFERENT est detecte — l URL repond mais l identite a change', () => {
+  const r = verifierNoeud({ ...CARTE, did: 'did:key:zAUTRE' }, { didAttendu: CARTE.did });
+  assert.strictEqual(r.ok, false);
+  assert.ok(/INATTENDU/.test(r.raison), r.raison);
+  /* Le cas exact d un DNS detourne ou d un operateur qui change de main: l URL reste bonne. */
+});
+
+t('★ SANS DID attendu, ca ne dit PAS « conforme » en silence', () => {
+  const r = verifierNoeud(CARTE);
+  assert.strictEqual(r.ok, true, 'rien n est en faute — mais...');
+  assert.ok(/AUCUN DID attendu/.test(r.raison),
+    'un ok sans epinglage doit DIRE que rien n est epingle, sinon il se lit comme une verification');
+});
+
+t('★ un noeud sans DID ou illisible: refus, et la raison distingue les deux', () => {
+  const sansDid = verifierNoeud({ name: 'x', network: 'alpha' }, { didAttendu: 'did:key:zA' });
+  assert.strictEqual(sansDid.ok, false);
+  assert.ok(/ne publie pas de DID/.test(sansDid.raison), sansDid.raison);
+  for (const c of [null, undefined, 'texte', 42]) {
+    const r = verifierNoeud(c, { didAttendu: 'did:key:zA' });
+    assert.strictEqual(r.ok, false, 'carte=' + String(c));
+    assert.ok(/rien rendu de lisible/.test(r.raison), 'illisible et sans-DID ne sont pas la meme panne');
+  }
+});
+
+const ATTENDUS = 16;
 Promise.all(encours).then(() => {
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   if (pass + fail !== ATTENDUS) {
