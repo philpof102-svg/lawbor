@@ -235,7 +235,20 @@ function build(deps = {}) {
   const store = deps.store || createStore(undefined, undefined, retention);
   // Compact once at boot so a node that has been down keeps its restart bounded, not just steady-state.
   if ((retention.maxMessages || retention.maxAgeMs) && typeof store.compact === 'function') {
-    try { const r = store.compact(); if (r.removed) console.log(`[lawbor] compacted store: dropped ${r.removed}, kept ${r.kept}`); } catch {}
+    /* The boot compact is where the neutral zero did its damage: `if (r.removed)` is false BOTH when
+     * there was nothing to remove and when the log could not be read, and the bare catch swallowed the
+     * rest — so a node booting on a corrupted journal started up silently clean. The three outcomes now
+     * say different things, loudly. A node that cannot read its own journal at boot is the single event
+     * an operator most needs in the log. */
+    try {
+      const r = store.compact();
+      if (r.state === 'unreadable') {
+        console.error(`[lawbor] COMPACT COULD NOT READ THE STORE: ${r.detail}. This is NOT an empty log — go look.`);
+      } else if (r.corruptLines) {
+        console.error(`[lawbor] compacted store: ${r.corruptLines} unparseable line(s) DROPPED FOR GOOD — messages were already lost before this boot`);
+      }
+      if (r.removed) console.log(`[lawbor] compacted store: dropped ${r.removed}, kept ${r.kept}`);
+    } catch (e) { console.error('[lawbor] compact threw at boot: ' + ((e && e.message) || e)); }
   }
   const doFetch = deps.fetch || (typeof fetch !== 'undefined' ? fetch : null);
   const self = deps.self || SELF;
@@ -620,7 +633,14 @@ function build(deps = {}) {
     try {
       // verifiesSettlements is reported next to authenticatesSenders on purpose: both are "is this node
       // actually checking, or just accepting?" A node with no chain reader rates nothing, and says so.
-      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, originatesSigned: node.originatesSigned, verifier: verifierStatus(node.relay.authenticates), verifiesSettlements: await settlementStatus(), consentLocal: true, admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only',
+      if (req.method === 'GET' && url === '/health') return json(res, 200, { ok: true, self: node.self, peers: node.peers().length, authenticatesSenders: node.relay.authenticates, originatesSigned: node.originatesSigned, verifier: verifierStatus(node.relay.authenticates), verifiesSettlements: await settlementStatus(), consentLocal: true,
+        /* CAN THIS NODE STILL READ ITS OWN JOURNAL? A store that cannot serves every view an empty list,
+         * which on a messaging node reads as "nobody wrote to you" — so this is the one place an operator
+         * would ever notice. Additive and separately named on purpose: `ok` at the top is HTTP liveness,
+         * `logs.ok` is whether the DATA behind those answers actually loaded. They are not the same claim.
+         * `logs.messages` is the verdict from load time, not a live stat — see store.health(). */
+        logs: typeof store.health === 'function' ? store.health() : null,
+        admits: admitProbation ? 'probation (strangers may speak; they hold no standing and consent still gates the inbox)' : 'proceed-only',
         /* THE ONE EXTERNAL DEPENDENCY THAT CAN STOP THIS NODE, and it was not in its own status.
          * Admission calls this URL for every inbound envelope. Disclosed with WHOSE it is, because
          * "MainStreet" as a bare name (the discovery card's version) tells an operator nothing about
