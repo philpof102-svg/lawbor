@@ -1220,8 +1220,20 @@ if (require.main === module) {
       + (missing.length ? '\n  ⚠️  still needed to go live: ' + missing.join(' · ')
         : '\n  ✓ signs its own envelopes' + (node.relay.authenticates ? ' and authenticates inbound peers' : ''))
       // said at every boot, because a dependency nobody sees is a dependency nobody can choose away from
-      + (ORACLE_IS_OURS ? '\n  ⓘ  admission asks ' + MAINSTREET_URL + ' — the shipped default, which WE run.'
-          + ' Every inbound envelope depends on it. Set MAINSTREET_URL to your own oracle to decide for yourself.' : ''));
+      /* ⛔ CETTE LIGNE A CONTREDIT LA PRECEDENTE, mesure le 2026-08-09. Elle etait gardee par le seul
+       * `ORACLE_IS_OURS` — qui ne regarde que `MAINSTREET_URL` — donc avec un preflight gitlawb injecte
+       * le meme demarrage imprimait « admission gitlawb: standing lu sur node.gitlawb.com » PUIS
+       * « admission asks avisradar… — the shipped default, which WE run ». Deux phrases, un demarrage,
+       * et l'une des deux fausse.
+       *
+       * C'est exactement le defaut que le commentaire quinze lignes plus haut nomme — « a message
+       * describing a state it never checked » — recommis juste en dessous de sa propre description.
+       * La banniere consulte desormais le plan d'admission, et dit la verite DANS LES DEUX CAS. */
+      + (plan.mode !== 'defaut'
+        ? '\n  ⓘ  admission is NOT ours: ' + plan.raison + '. `operatedByUs` reads false.'
+        : ORACLE_IS_OURS ? '\n  ⓘ  admission asks ' + MAINSTREET_URL + ' — the shipped default, which WE run.'
+          + ' Every inbound envelope depends on it. Set MAINSTREET_URL to your own oracle, or LAWBOR_ORACLE'
+          + ' to replace it entirely, to decide for yourself.' : ''));
     // Liveness + pruning only happen because something drives them; mesh.js schedules nothing.
     if (process.env.LAWBOR_BEAT !== '0') startHeartbeat();
     if (process.env.LAWBOR_ALLOW_UNAUTHENTICATED === '1') {
