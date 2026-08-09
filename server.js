@@ -1164,7 +1164,7 @@ if (require.main === module) {
    * pour quiconque lance le binaire livré. Une couture que personne ne peut atteindre est une
    * intention, pas une couture.
    *
-   * ⛔ INERTE sans `LAWBOR_ADMISSION`, et REFUS DE DÉMARRER si l'opérateur le pose sans le reste: sans
+   * ⛔ INERTE sans `LAWBOR_ORACLE`, et REFUS DE DÉMARRER si l'opérateur le pose sans le reste: sans
    * magasin d'attestations OU sans vérificateur de signatures, le preflight refuse TOUT LE MONDE, et
    * un nœud qui démarre en n'admettant plus personne a l'air vivant — bien pire qu'un arrêt franc. */
   const plan = planAdmissionWiring(process.env);
