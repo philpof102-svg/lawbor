@@ -35,10 +35,36 @@
  * « adoube » n'existe pas en pratique. C'est la troisieme forme de ce motif trouvee en une nuit, et la
  * seule qu'aucun test de refus ne pouvait voir.
  *
- * ⚠️ CE QUE CE FICHIER NE PROUVE PAS: que l'oracle ne rendra JAMAIS `PROCEED` ni de score. Trois
- * reponses ne sont pas un contrat. Le producteur de `/api/agent/preflight` n'est dans AUCUNE branche
- * du depot `mainstreet` (verifie: `git log --all -S` sur les 18 branches ne trouve ni la route ni
- * `PROCEED_LOW_VALUE`), donc son vocabulaire n'a pas pu etre lu a la source.
+ * ═══ MISE A JOUR DU 2026-08-10: LE PRODUCTEUR A ETE LOCALISE, ET IL TRANCHE ═══
+ *
+ * ⚠️ La borne ecrite ici disait « trois reponses ne sont pas un contrat, et le producteur n'est dans
+ * aucune branche de `mainstreet` ». La premiere moitie restait vraie, la seconde etait une limite de MA
+ * RECHERCHE: le producteur vit dans un depot voisin, `avisradar/src/mainstreet/preflight-core.js`
+ * (`avisradar-production.up.railway.app` appartient au projet Railway `avisradar`).
+ *
+ * SON CONTRAT, LU A LA SOURCE — et c'est une ALLOWLIST PAR EXCLUSION:
+ *
+ *     function isAllowed(decision, score, minScore = 30) {
+ *       if (decision === 'BLOCK') return false;
+ *       if (decision === 'CAUTION' && (score == null || Number(score) < minScore)) return false;
+ *       return true;                       // TOUT LE RESTE EST AUTORISE
+ *     }
+ *
+ * Et son propre test (`scripts/test-preflight-core.js`) epingle deux choses:
+ *     « green + no score -> PROCEED_LOW_VALUE »   et   « PROCEED_LOW_VALUE always allowed »
+ *
+ * ⛔ DONC LES DEUX COTES SONT DE FORMES OPPOSEES. Le producteur refuse par EXCEPTION (deux cas nommes),
+ * `lib/relay.js` autorise par EXCEPTION (un seul cas nomme, plus un plancher qu'un `null` ne franchit
+ * jamais). Contre la reponse REELLE (`PROCEED_LOW_VALUE` + `score: null`), le producteur dit AUTORISE
+ * et `lawbor` dit REFUSE. Les planchers par defaut different aussi: 30 la-bas, 40 ici.
+ *
+ * ⚠️ ETRE PLUS STRICT QUE SON ORACLE N'EST PAS UN BUG EN SOI — un consommateur a le droit d'exiger
+ * davantage. Le defaut est que cette barre est INATTEIGNABLE: aucune reponse reelle ne peut la
+ * satisfaire, donc ce n'est pas une politique plus stricte, c'est du code mort. Et le depot frere `biii`
+ * (`lib/trust.js`), consommateur du MEME oracle, implemente lui la semantique du producteur.
+ *
+ * ⛔ CE QUI RESTE A L'OPERATEUR: choisir entre suivre le contrat de l'oracle, ou garder une barre plus
+ * haute — mais alors une barre que quelque chose puisse franchir.
  */
 const assert = require('node:assert');
 const { createRelay } = require('../lib/relay');
@@ -109,7 +135,22 @@ t('★ la reponse REELLE de l oracle (`PROCEED_LOW_VALUE` + `score: null`) est r
   assert.match(r.reason, /not PROCEED/);
 });
 
-const ATTENDUS = 5;
+/* ── 5. LE PLANCHER, TROISIEME DIVERGENCE MESUREE ─────────────────────────────────────────────────── */
+
+t('le plancher par defaut de `lawbor` est 40 — celui du producteur est 30', async () => {
+  /* ⚠️ Epingle ici parce que c'est le genre d'ecart qui se decouvre au pire moment: un score de 35
+   * passerait chez l'oracle et serait refuse ici, sans qu'aucun message ne mentionne deux planchers.
+   * Ce cas ne dit PAS lequel est bon — il rend l'ecart visible et testable. */
+  const passe = await relais(async () => ({ decision: 'PROCEED', score: 45 })).accept(enveloppe());
+  assert.notStrictEqual(passe.action, 'drop', 'au-dessus des deux planchers: passe');
+
+  const entre = await relais(async () => ({ decision: 'PROCEED', score: 35 })).accept(enveloppe());
+  assert.strictEqual(entre.action, 'drop',
+    'ENTRE les deux planchers (30 chez le producteur, 40 ici): autorise la-bas, refuse ici');
+  assert.match(entre.reason, /too low to relay/);
+});
+
+const ATTENDUS = 6;
 Promise.all(encours).then(() => {
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   if (pass + fail !== ATTENDUS) {
