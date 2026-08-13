@@ -8,6 +8,7 @@
     "source": "github"
   },
   "version": "0.2.1",
+  "_remotes_note": "There is NO `remotes` entry here, and that omission is deliberate only in the sense that nobody has decided it. Measured 2026-08-14: a public node runs at https://lawbor-node-production.up.railway.app, the README names it twice, and the MCP registry entry for this server advertises no endpoint at all - so the hosted node is documented for humans and invisible to machines, on a project whose whole point is agent discoverability. It matters more than a missing convenience. The node was probed the same day (probe-deployed-node.cjs) and carries the 2026-07-21 hardening: a loopback request with a forwarding header must sign, the peer-response read is capped against OOM, the per-read CPU amplification is bounded. lawbor-bot@0.2.1 on npm predates all three, and BOTH machine paths route through it - `runtimeHint: npx` below, and the published plugin.json - so a discovered install fetches the unpatched package at launch while the patched node sits unadvertised. The real fix is republishing npm; advertising the remote instead is a ROUTING decision with a cost, because every inbound envelope this node admits calls the MainStreet oracle. That call is the operator's, not an agent's: this note exists so the choice is written down rather than silently defaulted.",
   "packages": [
     {
       "registryType": "npm",
