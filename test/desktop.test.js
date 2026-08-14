@@ -193,5 +193,54 @@ t('preload keeps contextIsolation guarantees: no node globals handed to the rend
   assert.ok(/contextBridge\.exposeInMainWorld/.test(PRELOAD));
 });
 
+// --- navigation: la fenetre elle-meme ne doit pas pouvoir quitter le panneau --------------------
+// `setWindowOpenHandler` ne couvre que window.open et target=_blank; une navigation de la fenetre
+// (location.href, un lien sans target, un formulaire) n'etait controlee par rien. Une page distante
+// chargee ici heriterait du MEME preload — donc de say(), accept(), block(), win('quit').
+// ⚖️ Ce n'etait pas un trou ouvert: toute donnee de pair passe par textContent (asserte plus haut),
+// donc aucun chemin connu n'y menait. C'est de la defense en profondeur, et la regle est desormais
+// dans desktop/lib/ comme le veut la convention annoncee en tete de ce fichier.
+const { decideNavigation } = require('../desktop/lib/nav.cjs');
+const MAIN = fs.readFileSync(path.join(__dirname, '..', 'desktop', 'main.cjs'), 'utf8');
+const PANNEAU = 'file:///C:/x/desktop/index.html';
+
+t('le panneau lui-meme reste chargeable — sinon le rechargement apres crash casserait', () => {
+  assert.equal(decideNavigation(PANNEAU, PANNEAU), 'allow');
+  assert.equal(decideNavigation(PANNEAU + '#inbox', PANNEAU), 'allow', 'une ancre reste le panneau');
+  assert.equal(decideNavigation(PANNEAU + '?v=jobs', PANNEAU), 'allow');
+});
+
+t('toute autre destination est refusee au pod, https part au navigateur du systeme', () => {
+  assert.equal(decideNavigation('https://basescan.org/tx/0x1', PANNEAU), 'external');
+  for (const u of [
+    'http://evil.invalid/p',            // http en clair: pas d ouverture externe non plus
+    'file:///C:/Windows/System32/x',    // un autre fichier local n est pas le panneau
+    'file:///C:/x/desktop/index.html.evil', // prefixe du panneau SANS separateur: doit etre refuse
+    'data:text/html,<script>1</script>',
+    'javascript:alert(1)',
+    'HTTPS://evil.invalid',             // regle sensible a la casse, comme l originale
+    '', null, undefined, 42,
+  ]) {
+    assert.equal(decideNavigation(u, PANNEAU), 'deny', 'doit refuser: ' + String(u));
+  }
+});
+
+t('main.cjs cable la regle sur les DEUX portes, pas seulement window.open', () => {
+  assert.ok(/setWindowOpenHandler/.test(MAIN), 'la porte window.open existe toujours');
+  assert.ok(/on\('will-navigate'/.test(MAIN), 'la navigation de la fenetre est interceptee');
+  const usages = MAIN.match(/decideNavigation\(/g) || [];
+  assert.ok(usages.length >= 2, 'les deux portes passent par la MEME regle, vu ' + usages.length);
+});
+
+t('main.cjs garde la frontiere qui rend tout le reste applicable', () => {
+  // Les assertions de posture ci-dessus lisent index.html et preload.cjs — jamais main.cjs. Or c est
+  // la que la frontiere est DECIDEE: avec nodeIntegration:true le renderer aurait require() quoi que
+  // le preload expose, et chacune de ces assertions resterait verte.
+  assert.ok(/contextIsolation:\s*true/.test(MAIN), 'contextIsolation doit rester ON');
+  assert.ok(/nodeIntegration:\s*false/.test(MAIN), 'nodeIntegration doit rester OFF');
+  assert.ok(/preload:\s*path\.join\(__dirname, 'preload\.cjs'\)/.test(MAIN), 'le preload est bien le notre');
+  assert.ok(!/loadURL\s*\(/.test(MAIN), 'le pod charge un FICHIER local, jamais une URL distante');
+});
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exitCode = fail ? 1 : 0;

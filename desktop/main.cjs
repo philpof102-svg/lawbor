@@ -20,8 +20,10 @@
 const { app, BrowserWindow, ipcMain, screen, shell } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const { pathToFileURL } = require('url');
 const { resolveConfig, resolveSize } = require('./lib/config.cjs');
 const { collapsed, expanded, firstPosition, fitOnScreen } = require('./lib/win.cjs');
+const { decideNavigation } = require('./lib/nav.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const CFG = resolveConfig(process.env);
@@ -85,8 +87,22 @@ function createWindow() {
   screen.on('display-metrics-changed', () => { try { win.setBounds(fitOnScreen(win.getBounds(), workArea())); } catch {} });
 
   // Descriptors and basescan links open in the real browser — never inside the pod, which has no
-  // navigation UI and no way back.
-  win.webContents.setWindowOpenHandler(({ url }) => { if (/^https:\/\//.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  // navigation UI and no way back. La regle vit dans lib/nav.cjs pour etre lancable hors Electron.
+  const PANNEAU = pathToFileURL(path.join(__dirname, 'index.html')).href;
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (decideNavigation(url, PANNEAU) === 'external') shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  // setWindowOpenHandler ne voit QUE window.open et target=_blank. Une navigation de la fenetre
+  // elle-meme passait sans controle — et une page distante chargee ici heriterait de CE preload,
+  // donc de say()/accept()/block(). Le panneau reste explicitement autorise: le renderer est
+  // recharge apres un crash, et parier sur ce qu'Electron emet dans ce cas serait un pari de trop.
+  win.webContents.on('will-navigate', (e, url) => {
+    const d = decideNavigation(url, PANNEAU);
+    if (d === 'allow') return;
+    e.preventDefault();
+    if (d === 'external') shell.openExternal(url);
+  });
 
   win.loadFile(path.join(__dirname, 'index.html'));
   win.once('ready-to-show', () => {
