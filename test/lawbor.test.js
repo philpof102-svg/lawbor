@@ -2,7 +2,7 @@
 // LAWBOR core guards — envelope + reputation-gated relay. Offline (preflight injected), deterministic.
 // Run: node test/lawbor.test.js
 const assert = require('node:assert');
-const { buildEnvelope, validateEnvelope, envelopeId } = require('../lib/envelope');
+const { buildEnvelope, validateEnvelope, envelopeId, signablePayload } = require('../lib/envelope');
 const { createRelay: makeRelay } = require('../lib/relay');
 
 // These relay cases predate signature verification and exercise the UNAUTHENTICATED path on purpose
@@ -55,6 +55,41 @@ const down = async () => { throw new Error('mainstreet 503'); };
     const res = await r.accept(mkEnv(A, B, 'hello B'));
     assert.equal(res.action, 'deliver'); assert.equal(res.to, 'human'); assert.equal(res.senderScore, 72);
   });
+  await t('envelope: `viaHuman` is SIGNED — a relay cannot forge provenance by recomputing the id', () => {
+    /* ⛔ L'ATTAQUE, MESUREE LE 2026-08-15. `envelopeId` couvrait `viaHuman`, la SIGNATURE non — et
+     * l'en-tete affirmait que « both cover it now ». Un id est un sha256 de champs PUBLICS: un relais
+     * intermediaire le recalcule sans secret. Il pouvait donc mettre viaHuman:'phil' sur le message
+     * AUTONOME d'un bot, recalculer l'id, passer validateEnvelope ET la verification de signature —
+     * puis node.js:163 (`origin: env.viaHuman ? 'human' : 'bot'`) le rangeait dans la BOITE DU HUMAIN,
+     * attribue a une personne nommee. Le sens inverse cachait un message humain hors de l'inbox.
+     * 💎 Seule la signature lie: un identifiant recalculable est une somme de controle, pas une preuve. */
+    const { envelope: autonome } = buildEnvelope({ from: A, to: B, body: 'message autonome du bot', ts: 1783000000, nonce: 'n1' });
+    assert.equal(autonome.viaHuman, null, 'temoin: le bot parle bien SANS humain');
+
+    const forge = { ...autonome, viaHuman: 'phil' };
+    forge.id = envelopeId(forge);                       // le relais recalcule l'id: aucun secret n'y entre
+    assert.equal(validateEnvelope(forge).ok, true,
+      'l id recalcule passe TOUJOURS le controle de structure — c est pourquoi il ne protege pas');
+
+    // CE QUI DOIT DIFFERER: les bytes signes. Sinon la signature d origine couvre la forgerie.
+    const sOrig = JSON.stringify(signablePayload(autonome).message);
+    const sForge = JSON.stringify(signablePayload(forge).message);
+    assert.notEqual(sOrig, sForge, 'viaHuman doit entrer dans les bytes signes, sinon la forgerie verifie');
+    assert.match(sOrig, /"viaHuman":""/, 'absent normalise en chaine vide, comme dans envelopeId');
+    assert.match(sForge, /"viaHuman":"phil"/);
+
+    // CAS OPPOSE: le sens inverse (effacer une provenance humaine) doit aussi casser la signature.
+    const { envelope: humain } = buildEnvelope({ from: A, to: B, body: 'msg', ts: 1783000000, nonce: 'n2', viaHuman: 'phil' });
+    const efface = { ...humain, viaHuman: null };
+    efface.id = envelopeId(efface);
+    assert.notEqual(JSON.stringify(signablePayload(humain).message), JSON.stringify(signablePayload(efface).message),
+      'effacer viaHuman doit casser la signature autant que l ajouter');
+
+    // TEMOIN: deux enveloppes IDENTIQUES produisent le meme payload — le correctif n a rien rendu instable.
+    const { envelope: jumeau } = buildEnvelope({ from: A, to: B, body: 'message autonome du bot', ts: 1783000000, nonce: 'n1' });
+    assert.equal(JSON.stringify(signablePayload(jumeau).message), sOrig, 'meme entree -> memes bytes signes');
+  });
+
   await t('relay DEDUP: the unbounded `seen` set is DISCLOSED and its growth is OBSERVABLE', async () => {
     /* `seen` grandit d'une entree par enveloppe, a vie, et c'est le choix CORRECT: evincer ferait
      * re-livrer une vieille enveloppe au premier rejeu de gossip. Ce qui manquait etait de le DIRE et
@@ -191,9 +226,15 @@ const down = async () => { throw new Error('mainstreet 503'); };
     assert.equal((await r.accept(env)).action, 'deliver', 'a transient oracle failure must not blacklist the id');
   });
 
-  await t('viaHuman is COVERED by the id: a relay cannot forge a bot message into the human inbox', () => {
-    // node.js picks the store view from viaHuman, so an unsigned, uncovered viaHuman was a way to
-    // move an autonomous bot message into a person's inbox — undetectably. Both directions now fail.
+  await t('viaHuman is COVERED by the id: tampering WITHOUT recomputing the id is detected', () => {
+    /* ⚠️ CE TEST S'APPELAIT « a relay cannot forge a bot message into the human inbox » — une
+     * affirmation de SECURITE que son corps ne prouvait pas. Il altere `viaHuman` SANS recalculer
+     * l'id, donc validateEnvelope echoue forcement. Or un relais qui veut forger RECALCULE l'id:
+     * c'est un sha256 de champs publics, il n'y entre aucun secret. Le test modelisait un attaquant
+     * qui fait MOINS que le vrai, et son nom promettait la propriete que cet ecart laissait ouverte.
+     * 💎 Il reste utile — il prouve que l'id LIE le champ — mais son nom dit desormais ce qu'il prouve.
+     * La propriete de securite est assertee par « `viaHuman` is SIGNED » plus haut, qui modelise
+     * l'attaquant qui recalcule. Mesure du 2026-08-15. */
     const bot = buildEnvelope({ from: A, to: B, body: 'autonomous chatter', viaHuman: null }).envelope;
     assert.equal(validateEnvelope({ ...bot, viaHuman: 'phil' }).ok, false, 'setting viaHuman is detected');
     const human = buildEnvelope({ from: A, to: B, body: 'a person wrote this', viaHuman: 'phil' }).envelope;
