@@ -31,11 +31,23 @@ const R = path.join(__dirname, '..');
 let n = 0;
 const ok = (c, m) => { assert.ok(c, m); n++; };
 
-/* Chemins que les pages APPELLENT reellement (fetch dans les chaines de page). */
+/* Chemins que les pages APPELLENT reellement (fetch dans les chaines de page).
+ *
+ * ⛔ UN WRAPPER LOCAL MASQUE LE SITE D APPEL. Le 2026-08-15, `apps/messenger.js` a fait passer
+ * /accept et /block par un helper `poste()` (pour lire enfin le refus du noeud). Le code appelait
+ * toujours les deux routes — mais ce detecteur, qui ne cherchait que `fetch(`, ne les voyait plus,
+ * et la liste explicite ci-dessous s est mise a porter deux entrees « en trop ». La porte a rougi
+ * dans la seconde qui suivait, ce qui est exactement son travail; l erreur aurait ete de retirer les
+ * deux lignes, c est-a-dire d affirmer qu elles sont auditees parce qu on ne les voit plus.
+ * On compte donc les formes d appel qui ATTEIGNENT LE RESEAU, nommees une par une. Et le temoin plus
+ * bas refuse qu une entree de la liste devienne invisible: si un nom manque a cette alternative, il
+ * fait rougir au lieu de disparaitre. */
+const FORMES_APPEL = ['fetch', 'poste'];   // `poste` = le POST unique de messenger.js, qui lit le refus
+const RE_APPEL = new RegExp('(?:' + FORMES_APPEL.join('|') + ')\\(\\s*[\'"`](\\/[a-z0-9][a-z0-9._/-]*)', 'gi');
 const appeles = new Map();
 for (const f of fs.readdirSync(path.join(R, 'apps')).filter((x) => x.endsWith('.js'))) {
   const src = fs.readFileSync(path.join(R, 'apps', f), 'utf8');
-  for (const m of src.matchAll(/fetch\(\s*['"`](\/[a-z0-9][a-z0-9._/-]*)/gi)) {
+  for (const m of src.matchAll(RE_APPEL)) {
     const p = '/' + m[1].slice(1).split(/[?#]/)[0].split('/')[0];
     if (!appeles.has(p)) appeles.set(p, new Set());
     appeles.get(p).add(f);
@@ -72,6 +84,19 @@ ok(JSON.stringify(manquants) === JSON.stringify([...NON_AUDITES.keys()].sort()),
   + manquants.join(' ') + '\n       liste  : ' + [...NON_AUDITES.keys()].sort().join(' ')
   + '\n       ⇒ Un chemin EN PLUS = une page appelle une route que l audit post-deploiement ne verifie'
   + ' pas. Un chemin EN MOINS = il a ete ajoute a claims.cjs: retirer sa ligne d ici.');
+
+/* ── TEMOIN: AUCUNE ENTREE DE LA LISTE NE DOIT DEVENIR INVISIBLE. ──────────────────────────────────
+ * Sans lui, un futur wrapper qui masque un site d appel ferait simplement disparaitre la ligne de
+ * `manquants`, et la seule facon de remettre les deux listes d accord serait de SUPPRIMER l entree —
+ * c est-a-dire d affirmer « auditee » sur la foi de notre propre cecite. Le detecteur doit voir
+ * appeler chaque chemin qu on declare appele-mais-non-sonde. */
+for (const p of NON_AUDITES.keys()) {
+  ok(appeles.has(p),
+    p + ' est declare appele-mais-non-sonde, et le detecteur ne le voit PLUS appele. Deux causes, et'
+    + ' il ne faut surtout pas les confondre: soit la page ne l appelle vraiment plus (retirer la'
+    + ' ligne), soit un wrapper local masque le site d appel (ajouter son nom a FORMES_APPEL).'
+    + ' Formes reconnues aujourd hui: ' + FORMES_APPEL.join(', '));
+}
 
 /* ── ET LES DEUX ROUTES D ECRITURE DOIVENT RESTER SIGNALEES COMME TELLES. ──────────────────────── */
 for (const p of ['/accept', '/block']) {

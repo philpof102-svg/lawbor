@@ -120,6 +120,28 @@ function peerOf(t){ for(var i=0;i<(t.peers||[]).length;i++){ if(String(t.peers[i
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function toast(m){ $('toast').textContent=m; }
 
+/* ⛔ UNE ECRITURE REFUSEE NE DOIT PAS S'ANNONCER COMME UN SUCCES.
+ * fetch() ne rejette QUE sur une panne reseau: un 401 ou un 500 rend une promesse RESOLUE. Les deux
+ * boutons du consent gate (/accept, /block) faisaient un await fetch(...) sans jamais regarder la
+ * reponse, puis affichaient leur toast de succes inconditionnellement.
+ * ⚠️ AUCUN BACKTICK DANS CE FICHIER: tout ce bloc vit DANS le template literal PAGE, donc un accent
+ * grave de commentaire le termine. node --check l a attrape a la premiere tentative.
+ * MESURE DU 2026-08-15, sur le texte livre de ce fichier, /block: HTTP 200, 401 et 500 produisent
+ * TOUS LES TROIS « blocked … dropped before storage, indistinguishable from silence » — une promesse
+ * de PROTECTION affichee alors que rien n a ete bloque. Le 401 n a rien d hypothetique: le noeud
+ * repond 401 {error:'operator-only: …'} hors localhost, et claims.cjs l asserte.
+ * Ce fichier savait pourtant lire un refus: work() et send() testent if(r.error) puis toast(...).
+ * La regle existait, elle n avait pas traverse jusqu aux deux ecritures les plus sensibles. */
+async function poste(path, payload){
+  var res;
+  try{ res=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)}); }
+  catch(e){ return {error:'the node is unreachable ('+((e&&e.message)||e)+')'}; }
+  var r=null; try{ r=await res.json(); }catch(e){ r=null; }   // un 500 peut rendre autre chose que du JSON
+  if(!res.ok) return {error:(r&&r.error)||('HTTP '+res.status)};
+  if(r&&r.error) return {error:r.error};
+  return r||{};
+}
+
 // ---- work messages: an ordinary envelope whose body is typed JSON (lib/work.js) --------------------
 function asWork(b){ try{ if(typeof b!=='string'||b.charAt(0)!=='{') return null; var o=JSON.parse(b); return (o['lawbor.work']===1&&o.kind)?o:null; }catch(e){ return null; } }
 /** Thread-list preview: a work message must never show as raw JSON in the sidebar (it did).
@@ -252,8 +274,8 @@ async function openThread(id, keep){
       '<button class="ghost" id="acc">Accept → move to Inbox</button><button class="ghost" id="blk">Block (total, silent)</button>';
     // switch the view BEFORE reloading: load() re-opens the selected thread asynchronously, and that
     // await used to land AFTER setTab() and repaint the old view's gate over the new one.
-    $('acc').onclick=async function(){ await fetch('/accept',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({addr:peer})}); toast('accepted '+short(peer)+' → their thread moves to Inbox'); sel=null; view='inbox'; lastHash=''; setTab(); await load(); };
-    $('blk').onclick=async function(){ await fetch('/block',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({addr:peer})}); toast('blocked '+short(peer)+' — dropped before storage, indistinguishable from silence'); sel=null; lastHash=''; setTab(); await load(); };
+    $('acc').onclick=async function(){ var r=await poste('/accept',{addr:peer}); if(r.error) return toast('NOT accepted — '+r.error+' — '+short(peer)+' stays quarantined'); toast('accepted '+short(peer)+' → their thread moves to Inbox'); sel=null; view='inbox'; lastHash=''; setTab(); await load(); };
+    $('blk').onclick=async function(){ var r=await poste('/block',{addr:peer}); if(r.error) return toast('NOT blocked — '+r.error+' — you are NOT protected from '+short(peer)); toast('blocked '+short(peer)+' — dropped before storage, indistinguishable from silence'); sel=null; lastHash=''; setTab(); await load(); };
   } else g.hidden=true;
   try{
     var d=await (await fetch('/thread?id='+encodeURIComponent(id),{cache:'no-store'})).json();
