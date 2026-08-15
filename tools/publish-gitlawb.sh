@@ -35,11 +35,42 @@ fi
 echo "· gl: $(command -v gl) ($(gl --version)) · helper: $(command -v git-remote-gitlawb || echo MISSING)"
 
 # 2. identity (NEVER overwrite an existing one — that key IS the account/URL, reused across Toshi + LAWBOR)
+#
+# ⛔ "NO IDENTITY HERE" IS NOT "NO IDENTITY", AND THE DIFFERENCE IS THE ACCOUNT.
+#    Measured 2026-08-15 against the real gl CLI: `gl identity show` reads $HOME/.gitlawb/identity.pem
+#    and NOTHING else — an unreachable GITLAWB_NODE still exits 0, and a different $HOME exits 1 with
+#    "no identity found". So sudo, another WSL distro, a container, or a fresh checkout on a second
+#    machine all produce that exit 1 while the real key sits safely on disk somewhere else.
+#    This branch used to answer that by MINTING A NEW DID and carrying on to the mirror. Both paths
+#    then ended on the same "✅ LAWBOR mirrored to gitlawb" line, so the success message could not
+#    tell "republished under our account" from "published under a brand-new one". That is not a
+#    cosmetic difference: gitlawb standing is a PUSH COUNTER, so a fresh DID restarts it at zero
+#    while the old profile keeps the history — and nothing on screen said which one just happened.
+#    Creating an identity is therefore OPT-IN and never a fallback. Refusing costs a re-run; guessing
+#    costs the account.
+IDENTITY_ORIGIN="reused"
 if gl identity show >/dev/null 2>&1; then
   echo "· identity exists (reused): $(gl identity show)"
 else
-  echo "· creating a new DID identity (saved to ~/.gitlawb/identity.pem — BACK THIS FILE UP)"
+  if [ "${GITLAWB_NEW_IDENTITY:-}" != "1" ]; then
+    cat >&2 <<EOF
+
+⛔ No gitlawb identity is readable from HOME=$HOME (expected $HOME/.gitlawb/identity.pem).
+
+   This script will NOT mint one for you. Publishing under a new DID is not a smaller version of
+   publishing — it is publishing as SOMEBODY ELSE: the standing counter restarts at zero and the
+   existing profile (the one that already carries Toshi) keeps the history.
+
+   Pick the one that is true:
+     · the key exists but this shell cannot see it  -> run WITHOUT sudo / in the right WSL distro,
+       or copy ~/.gitlawb/identity.pem into place, then re-run;
+     · you really do want a brand-new account       -> GITLAWB_NEW_IDENTITY=1 bash "\$0"
+EOF
+    exit 3
+  fi
+  echo "· GITLAWB_NEW_IDENTITY=1 — minting a NEW DID ON PURPOSE (saved to ~/.gitlawb/identity.pem — BACK THIS FILE UP)"
   gl identity new
+  IDENTITY_ORIGIN="NEW"
 fi
 MY_DID="$(gl identity show)"
 
@@ -72,6 +103,13 @@ gl mirror "$GITHUB_URL" --repo lawbor \
 
 echo
 DID_KEY="$(echo "$MY_DID" | cut -d: -f3)"
-echo "✅ LAWBOR mirrored to gitlawb (current master)"
+# The success line must SAY which of the two things happened. A message identical in both worlds is
+# not a report, it is a shrug: the reader cannot tell a republish from a first push by a new account.
+if [ "$IDENTITY_ORIGIN" = "NEW" ]; then
+  echo "✅ LAWBOR mirrored to gitlawb (current master) — under a BRAND-NEW DID minted by this run"
+  echo "   ⚠️ standing starts at ZERO for this identity; anything published earlier lives on the OLD profile"
+else
+  echo "✅ LAWBOR mirrored to gitlawb (current master) — under the EXISTING DID (reused, standing preserved)"
+fi
 echo "   profile: https://gitlawb.com/${DID_KEY:0:8}"
 echo "   verify:  gl repo list   (should now show 'lawbor' next to 'toshi')"
