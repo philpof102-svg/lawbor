@@ -257,6 +257,64 @@ The two follow-ups named just above are now closed, with tests in `test/consent.
   (`/lawbor/accept`) is untouched (reputation-gated, not operator-gated). Pinned by a server test that
   drives the handler with a spoofed remote socket (remote → 401, loopback → 200).
 
+## Fixed 2026-08-15 — provenance (`viaHuman`) was covered by the id but not by the signature
+
+**What was wrong.** `lib/envelope.js` documented this hole and declared it closed: *"neither the id
+nor the signature covered it. Both cover it now."* That was true of the id and false of the
+signature. `signablePayload()` listed `from`, `to`, `thread`, `nonce`, `ts`, `bodyHash` — and not
+`viaHuman`.
+
+An id protects nothing against a relay. `envelopeId()` is a sha256 over public fields; no secret
+enters it, so any node on the path recomputes it.
+
+**Impact.** Reproduced end to end against the real modules:
+
+1. an intermediate relay sets `viaHuman: 'phil'` on a bot's **autonomous** message;
+2. it recomputes `env.id = envelopeId(env)`;
+3. `validateEnvelope()` passes — the id matches the new contents;
+4. the honest bot's signature **still verifies** — the two signable payloads were byte-identical;
+5. `lib/node.js` files inbound messages with `origin: env.viaHuman ? 'human' : 'bot'`, so it lands in
+   the **human's inbox, attributed to a named person**.
+
+The changed id also slips past the relay's dedup, so the genuine envelope *and* the forgery are both
+delivered. The reverse direction works too: `'phil' -> null` hides a human's message out of the inbox.
+
+This is a different class from the `from` impersonation above: not *who sent it*, but *who is said to
+have spoken through the bot*.
+
+**The fix.** `viaHuman` is now in the signed types and message, normalised to `''` when absent exactly
+as `envelopeId()` does, so both sides compute the same bytes.
+
+> **Compatibility.** Adding a field changes the EIP-712 type hash, so **any signature produced before
+> 2026-08-15 no longer verifies**. This was deliberate; the alternative was leaving open a hole the
+> code documented as closed. Whether a live node holds pre-existing signed envelopes is an operator
+> question this repo cannot answer.
+
+**Why it survived a test.** The regression test covering this field was named *"a relay cannot forge a
+bot message into the human inbox"* — a security claim — while its body tampered with `viaHuman`
+**without recomputing the id**, so validation failed trivially. It modelled an attacker who does less
+than the real one, and its name promised the property that gap left open. It is kept (it proves the id
+binds the field) and renamed to what it proves; the security property is now asserted by a case that
+models the attacker who recomputes.
+
+## Corrected 2026-08-15 — the loop bound is dedup, not the hop cap
+
+`lib/relay.js` credited its hop cap with *"no infinite relay loops"*. Measured, three cases:
+
+```
+fresh relay, hops=7 > maxHops=6            -> drop "hop cap exceeded"      (the cap works)
+same relay, a hostile relay reset hops=0   -> drop "already seen (dedup)"  (not the cap)
+relay that has NEVER seen it, hops=0       -> FORWARD                      (the cap does not stop it)
+```
+
+`hops` is neither signed nor covered by the id, and it **cannot** be — every relay increments it — so
+anyone resets it. The cap bounds the length of a path *as declared*: an honest chain stops at
+`maxHops`. What bounds circulation is **dedup** — each relay passes an id once, so an envelope crosses
+at most *N* relays in a mesh of *N*, whatever `hops` says.
+
+No exploitable hole: the property is real, it was simply attributed to the wrong half. The consequence
+matters for operators, and is listed under Known limits below.
+
 ## Known limits — not fixed, stated plainly
 
 - **Not sybil-resistant.** A peer slot costs one address scoring ≥ `minScore`. Signature
@@ -273,6 +331,16 @@ The two follow-ups named just above are now closed, with tests in `test/consent.
   connect-time lookup hook applying the exported `isPrivateAddress()` to the address actually
   dialled.
 - **Message bodies are plaintext.** LAWBOR adds no confidentiality today.
+- **The relay's dedup set grows without bound.** `lib/relay.js` keeps every envelope id it has
+  handled, one entry per envelope, for the life of the process. Nothing evicts. This is the correct
+  default — see the next point for why — and the cost is memory. `relay.seenCount` reports the live
+  size and `relay.seenIsBounded` says whether the default (unbounded) Set is in use, so the growth is
+  observable rather than silent. `cfg.seen` is the supported lever for a different policy.
+- **An evicting `seen` reopens infinite circulation.** Injecting a bounded or expiring Set is an
+  operator trade-off, and a larger one than it looks: eviction grants an envelope a second pass on the
+  same relay, and because `hops` can be reset by any relay, the hop cap does not catch it. Dedup is
+  what holds the loop bound (see the correction above). Pinned by a test, so weakening `seen` reddens
+  the suite rather than failing quietly.
 
 ## Reporting
 
