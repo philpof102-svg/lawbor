@@ -211,7 +211,72 @@ t('★ sans source declaree, le refus reste MUET sur l identite plutot que d en 
   assert.ok(!/MainStreet/i.test(r.reason), r.reason);
 });
 
-const ATTENDUS = 15;
+/* ── 5. UN DID QUE LE RESEAU NE CONNAIT PAS N A PAS UN STANDING DE ZERO ───────────────────────────────
+ *
+ * `lib/gitlawb-standing.js` appelle `resolve` EN PLUS de `trust` uniquement pour cette distinction, et
+ * son en-tete dit pourquoi: `gl node trust` rend « 0.00 / newcomer » pour un DID INEXISTANT exactement
+ * comme pour un agent reel sans historique. Mesure du 2026-08-15: le champ `knownToNetwork` etait
+ * produit, documente comme etant tout l interet du double appel, et n avait AUCUN consommateur dans le
+ * depot — `makeGitlawbPreflight` le jetait. Un DID invente ressortait donc en « standing gitlawb 0.000
+ * — sous le plancher »: le refus etait juste, la PHRASE affirmait un standing jamais mesure. */
+
+t('★ LE CORRECTIF — un DID inconnu du reseau n obtient pas un « standing de 0.000 »', () => {
+  const r = planAdmission({ binding: LIE, trust: 0, minScore: 40, knownToNetwork: false });
+  assert.strictEqual(r.decision, 'BELOW-FLOOR', 'le refus ne change pas, seule l affirmation change');
+  assert.strictEqual(r.knownToNetwork, false, 'le champ doit voyager jusqu a la decision');
+  assert.ok(/ne CONNAIT PAS ce DID/.test(r.reason), 'la raison doit dire que le reseau ne le connait pas: ' + r.reason);
+  assert.ok(/ARTEFACT/.test(r.reason), 'et nommer le 0 pour ce qu il est: ' + r.reason);
+  assert.ok(!/standing gitlawb 0\.000/.test(r.reason),
+    'elle ne doit PLUS affirmer un standing mesure: ' + r.reason);
+});
+
+t('★ TEMOIN — un DID CONNU avec un score bas garde sa phrase d origine (rien n est avale)', () => {
+  const r = planAdmission({ binding: LIE, trust: 0.05, minScore: 40, knownToNetwork: true });
+  assert.strictEqual(r.decision, 'BELOW-FLOOR');
+  assert.strictEqual(r.knownToNetwork, true);
+  assert.ok(/standing gitlawb 0\.050/.test(r.reason), 'un agent REEL qui debute a bien un standing bas: ' + r.reason);
+  assert.ok(!/ARTEFACT/.test(r.reason), 'et ce n est pas un artefact: ' + r.reason);
+});
+
+t('★ TROIS ETATS — `knownToNetwork` absent reste « on ne sait pas », jamais « inconnu »', () => {
+  const r = planAdmission({ binding: LIE, trust: 0.05, minScore: 40 });   // champ non fourni
+  assert.strictEqual(r.knownToNetwork, null, 'absent doit rendre null, pas false');
+  assert.ok(!/ne CONNAIT PAS/.test(r.reason),
+    'ne pas savoir si le reseau le connait n autorise pas a dire qu il ne le connait pas: ' + r.reason);
+});
+
+t('★ deux lectures qui se CONTREDISENT ne donnent pas un droit d entree', () => {
+  /* resolve dit « not found » et trust rend 0.9: impossible en pratique, et c est justement pourquoi la
+   * garde est AVANT la comparaison. Un desaccord entre deux lectures n est jamais un PROCEED. */
+  const r = planAdmission({ binding: LIE, trust: 0.9, minScore: 40, knownToNetwork: false });
+  assert.notStrictEqual(r.decision, 'PROCEED', 'un DID introuvable ne passe pas, meme avec un score haut');
+  assert.strictEqual(r.decision, 'BELOW-FLOOR');
+});
+
+t('★ BOUT EN BOUT — le champ traverse lireStanding, le preflight, et la decision', async () => {
+  const preflight = makeGitlawbPreflight({
+    lireLiaison: async () => ({ bound: true, did: 'did:key:zINVENTE' }),
+    // ce que lib/gitlawb-standing.js rend VRAIMENT sur un DID que resolve ne trouve pas
+    lireStanding: async () => ({ trust: 0, level: 'newcomer', knownToNetwork: false,
+      source: 'https://node.example', note: 'le reseau ne connait PAS ce DID' }),
+    minScore: 40,
+  });
+  const r = await preflight('0x' + 'ab'.repeat(20));
+  assert.strictEqual(r.knownToNetwork, false, 'jete entre le lecteur et le decideur — c etait le defaut');
+  assert.ok(/ne CONNAIT PAS ce DID/.test(r.reason), r.reason);
+  assert.strictEqual(r.source, 'https://node.example', 'la source doit continuer de voyager');
+
+  // et un lecteur qui ne rend PAS le champ ne doit pas se faire lire comme « inconnu »
+  const muet = makeGitlawbPreflight({
+    lireLiaison: async () => ({ bound: true, did: 'did:key:zTEST' }),
+    lireStanding: async () => ({ trust: 0.05, source: 'https://node.example' }),   // pas de knownToNetwork
+    minScore: 40,
+  });
+  const m = await muet('0x' + 'cd'.repeat(20));
+  assert.strictEqual(m.knownToNetwork, null, 'undefined doit rester « on ne sait pas »');
+});
+
+const ATTENDUS = 20;
 Promise.all(encours).then(() => {
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   if (pass + fail !== ATTENDUS) {
