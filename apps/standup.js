@@ -51,6 +51,21 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <div class="grid" id="grid"></div>
 <div class="frontier"><div class="l">ready job frontier (claimable now)</div><div id="frontier"></div></div>
 <script>
+/* ⛔ UN jobId EST CHOISI PAR LE PAIR, ET IL ARRIVE ICI DANS innerHTML.
+ * lib/work.js le dit en toutes lettres ligne 30 (« jobId is CHOSEN BY THE REQUESTER ») et le passe
+ * par str(x, 80) — un trim et une troncature, AUCUNE neutralisation.
+ * MESURE DU 2026-08-15, en enchainant les vrais composants (buildWork -> graphOf -> l expression de
+ * rendu extraite de ce fichier), avec jobId = un img/onerror de 28 caracteres:
+ *     ecrit dans le DOM : <span class="chip"><img src=x onerror=alert(1)></span>
+ * La charge ressort INTACTE. Un script injecte dans une page LAWBOR herite de son origine, donc des
+ * routes d ecriture du noeud (/say, /accept, /block) — c est le modele de menace que desktop/
+ * preload.cjs raisonne deja explicitement.
+ * ⚠️ Ce fichier PORTAIT deja un esc (portee module, cote serveur) et ne l appelait NULLE PART: le
+ * rendu vit dans le script de la page, une autre portee. L echappeur correct existait, hors de
+ * portee du seul endroit qui en avait besoin.
+ * ⛔ AUCUN ACCENT GRAVE DANS CE BLOC: il vit DANS le template literal PAGE, donc un backtick le
+ * termine. node --check l a attrape, comme pour messenger.js une heure plus tot. */
+function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function card(n,l){ return '<div class="card"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'; }
 async function tick(){
   try{ const r=await fetch('/app/standup/data',{cache:'no-store'}); const d=await r.json();
@@ -66,7 +81,7 @@ async function tick(){
         '<div class="row"><span style="color:var(--good)">awarded</span><b>'+j.awarded+'</b></div>'+
         '<div class="row"><span class="muted">cancelled</span><b>'+j.cancelled+'</b></div></div>';
     document.getElementById('frontier').innerHTML = d.readyFrontier.length
-      ? d.readyFrontier.map(function(x){ return '<span class="chip">'+x+'</span>'; }).join('')
+      ? d.readyFrontier.map(function(x){ return '<span class="chip">'+esc(x)+'</span>'; }).join('')
       : '<span class="muted">nothing ready — no open job whose dependencies are all met</span>';
   }catch(e){}
 }

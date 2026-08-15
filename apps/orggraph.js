@@ -85,6 +85,13 @@ function depthOf(id, map, memo, stack){
   for(var i=0;i<n.dependsOn.length;i++){ var up=n.dependsOn[i]; if(map.has(up)) d=Math.max(d,1+depthOf(up,map,memo,stack)); }
   stack.delete(id); memo.set(id,d); return d;
 }
+/* ⛔ MEME DEFAUT QUE apps/standup.js, MEME DONNEE. dependsOn et blockedBy sont des listes de jobIds,
+ * et un jobId est CHOISI PAR LE PAIR (lib/work.js ligne 30, passe par str(x, 80) = trim + troncature,
+ * aucune neutralisation). Le panneau les joignait dans innerHTML sans echapper.
+ * Ce fichier savait deja le faire pour le TITRE — ptitle utilise textContent — mais le corps du
+ * panneau, lui, construit du HTML.
+ * ⛔ Aucun accent grave ici: ce bloc vit dans le template literal de la page. */
+function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function colorOf(n){
   if(n.state==='cancelled') return 'var(--cancel)';
   if(n.state==='awarded') return 'var(--awarded)';
@@ -121,9 +128,9 @@ function applySelection(){
   var st = n.state==='open' ? (n.ready?'ready':'blocked') : n.state;
   document.getElementById('ptitle').textContent=n.jobId;
   document.getElementById('pbody').innerHTML=
-    row('state', st) + row('requester', (n.requester||'').slice(0,10)+'…') + row('bids', n.bids||0) +
-    row('depends on', (n.dependsOn&&n.dependsOn.length)? n.dependsOn.join(', ') : '—') +
-    row('blocked by', (n.blockedBy&&n.blockedBy.length)? n.blockedBy.join(', ') : '—');
+    row('state', esc(st)) + row('requester', esc((n.requester||'').slice(0,10))+'…') + row('bids', n.bids||0) +
+    row('depends on', (n.dependsOn&&n.dependsOn.length)? esc(n.dependsOn.join(', ')) : '—') +
+    row('blocked by', (n.blockedBy&&n.blockedBy.length)? esc(n.blockedBy.join(', ')) : '—');
   panel.style.display='block';
 }
 function row(l,v){ return '<div class="row"><span>'+l+'</span><b>'+String(v)+'</b></div>'; }
