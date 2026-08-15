@@ -97,6 +97,50 @@ const good = () => ({ sigFacts: new Map([[SIG, { signer: B }]]) });
     assert.throws(() => work.buildWork('validate', { jobId: 'j1', keySig: SIG }), /keyAddr/);
   });
 
+  /* ── LA PREUVE EST GLOBALE, LE DEDUP ETAIT PREMIER-JOB-SEULEMENT ────────────────────────────────────
+   * Mesure du 2026-08-15: `seenVal` etait cle sur le txHash SEUL. Un worker ayant prouve sa cle par UN
+   * penny-drop et travaillant sur DEUX jobs voyait sa citation AVALEE sur le second (validations=0),
+   * et server.js rendait au payeur « it was NOT signed by the payee » — une fausse accusation nee de
+   * notre propre dedup, alors que l'en-tete de work.js declare la preuve GLOBALE (« true whatever job
+   * it is cited on »). Le chemin SIGNATURE du meme verbe n'a jamais eu ce dedup: les deux chemins de la
+   * meme preuve se comportaient a l'oppose. */
+  await t('LE CORRECTIF — un penny-drop unique prouve la cle sur CHAQUE job qui le cite', () => {
+    const R2 = '0x' + 'cc'.repeat(20);                 // un second requester, un autre job
+    const TX = '0x' + '11'.repeat(32);
+    const facts = new Map([[TX, { chainId: 8453, token: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+      from: B, to: A, valueMicro: '1', confirmations: 20, blockTime: 1700000000 }]]);
+    const log = [
+      { id: '1', from: A, to: B, rxAt: 10, body: work.buildWork('help_wanted', { jobId: 'j1', task: 't' }) },
+      { id: '2', from: R2, to: B, rxAt: 11, body: work.buildWork('help_wanted', { jobId: 'j2', task: 't' }) },
+      { id: '3', from: A, to: B, rxAt: 12, body: work.buildWork('award', { jobId: 'j1', worker: B, price: '5 USDC' }) },
+      { id: '4', from: R2, to: B, rxAt: 13, body: work.buildWork('award', { jobId: 'j2', worker: B, price: '7 USDC' }) },
+      { id: '5', from: B, to: A, rxAt: 14, body: work.buildWork('validate', { jobId: 'j1', txHash: TX }) },
+      { id: '6', from: B, to: R2, rxAt: 15, body: work.buildWork('validate', { jobId: 'j2', txHash: TX }) },
+    ];
+    const jobs = work.foldThread(log, { txFacts: facts });
+    assert.equal(jobs.get('j1').payeeProved, true, 'premier job: la preuve tient');
+    assert.equal(jobs.get('j2').payeeProved, true,
+      'second job: la MEME preuve tient — elle etait avalee par le dedup global');
+    /* La nuance de l'en-tete survit au correctif: le tx est B->A, donc il ne valide le RAIL que du
+     * job dont A et B sont les parties. j2 (parties B et R2) garde pathValidated=false. */
+    assert.equal(jobs.get('j1').pathValidated, true, 'j1: les deux parties ont pris part au transfert');
+    assert.equal(jobs.get('j2').pathValidated, false,
+      'j2: la cle est prouvee mais PAS ce rail — les deux questions restent separees');
+  });
+
+  await t('TEMOIN — le meme tx cite DEUX FOIS sur le MEME job ne compte qu une fois (anti-rejeu intact)', () => {
+    const TX = '0x' + '33'.repeat(32);
+    const facts = new Map([[TX, { chainId: 8453, token: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+      from: B, to: A, valueMicro: '1', confirmations: 20, blockTime: 1700000000 }]]);
+    const log = [
+      { id: '1', from: A, to: B, rxAt: 10, body: work.buildWork('help_wanted', { jobId: 'j1', task: 't' }) },
+      { id: '2', from: B, to: A, rxAt: 11, body: work.buildWork('validate', { jobId: 'j1', txHash: TX }) },
+      { id: '3', from: B, to: A, rxAt: 12, body: work.buildWork('validate', { jobId: 'j1', txHash: TX }) },
+    ];
+    const j = work.foldThread(log, { txFacts: facts }).get('j1');
+    assert.equal(j.validations.length, 1, 'le rejeu sur le meme job reste dedupe: ' + j.validations.length);
+  });
+
   await t('a REAL signature verifies, an impostor does not, and a foreign one cannot be replayed', async () => {
     let accounts; try { accounts = require('viem/accounts'); } catch { console.log('      (viem absent — skipped)'); return; }
     const me = accounts.privateKeyToAccount('0x' + '11'.repeat(32));
