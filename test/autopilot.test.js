@@ -74,6 +74,43 @@ t('waits for minBidsBeforeAward, and refuses a bid above maxPrice', () => {
   assert.equal(a.award, false); assert.match(a.reason, /maxPrice/);
 });
 
+t('★ « le moins cher gagne » ne classe QUE des grandeurs comparables', () => {
+  /* ⛔ `priceOf` prenait le PREMIER nombre de la chaine et jetait tout le reste, l'unite comprise. Or
+   * `decideAward` s'en sert pour le plafond ET pour le tri — un bot autonome ENGAGE de l'argent dessus.
+   * Mesure du 2026-08-15, maxPrice 100:
+   *   « 90 USDC » vs « 50 ETH »               -> AWARD a 50 ETH    (l'unite jetee passe le plafond)
+   *   « 30 USDC » vs « 0.5 ETH »              -> AWARD a 0.5 ETH   (la plus chere parait la MOINS chere)
+   *   « 25 USDC » vs « v2 rewrite, 200 USDC » -> AWARD a 200 USDC  (le nombre lu est le 2 de « v2 »)
+   * Le dernier n'a rien d'exotique: « v2 » dans un libelle est un texte que n'importe qui ecrit. */
+  const duel = (p1, p2) => {
+    const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' })),
+               row(W1, REQ, buildWork('bid', { jobId: 'j1', price: p1 })),
+               row(W2, REQ, buildWork('bid', { jobId: 'j1', price: p2 }))];
+    return decideAward(one(m), REQ, { minBidsBeforeAward: 1, maxPrice: 100, currency: 'USDC' });
+  };
+
+  const autreUnite = duel('90 USDC', '50 ETH');
+  assert.equal(autreUnite.price, '90 USDC', 'une offre en ETH ne franchit pas un plafond exprime en USDC');
+
+  const parait = duel('30 USDC', '0.5 ETH');
+  assert.equal(parait.price, '30 USDC', 'une unite plus chere ne doit pas passer pour la moins chere');
+
+  const bruit = duel('25 USDC', 'v2 rewrite, 200 USDC');
+  assert.equal(bruit.price, '25 USDC', 'un prix illisible est ecarte, jamais devine a partir d un « v2 »');
+
+  /* ⚖️ TEMOIN — sans lui, « tout refuser » passerait les trois cas ci-dessus. */
+  const meme = duel('80 USDC', '20 USDC');
+  assert.equal(meme.price, '20 USDC', 'a unite egale, le moins cher gagne toujours');
+  // un nombre NU vaut la devise du bot: c'est la forme que decideBid produit lui-meme.
+  assert.equal(duel('80 USDC', '20').price, '20', 'un nombre sans unite reste comparable');
+
+  /* Et le refus doit DIRE « incomparable », pas « trop cher »: sinon un operateur baisse son plafond
+   * pour un probleme d'unite et ne comprend jamais pourquoi plus rien ne passe. */
+  const aucun = duel('50 ETH', '9 BTC');
+  assert.equal(aucun.award, false);
+  assert.match(aucun.reason, /COMPARABLE|incomparable/i, 'le refus nomme la vraie cause: ' + aucun.reason);
+});
+
 t('a tie on price breaks on the EARLIEST bid — two nodes folding the same log must agree', () => {
   const m = [row(REQ, W1, buildWork('help_wanted', { jobId: 'j1', task: 't' }), 1000),
              row(W2, REQ, buildWork('bid', { jobId: 'j1', price: '10 USDC' }), 3000),
