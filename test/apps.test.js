@@ -49,6 +49,51 @@ const premApp = { name: 'vault', description: 'premium', premium: true, routes: 
     assert.match(r.body.error, /fail closed/i);
   });
 
+  await t('FAIL CLOSED: an UNREADABLE amount is never a paid amount (NaN walked through the guard)', async () => {
+    /* ⛔ La garde etait `if (Number(v.amountUsdc) + 1e-9 < Number(price))`, et `Number(undefined)` vaut
+     * NaN — or TOUTE comparaison avec NaN est fausse, donc la garde ne se declenchait pas et un
+     * abonnement de 30 jours etait accorde pour un montant JAMAIS LU. Mesure du 2026-08-15, prix 5:
+     *   '5' -> actif (correct) · '1' -> refuse (correct) · null -> refuse (Number(null)===0)
+     *   undefined -> ACTIF <<<   'abc' -> ACTIF <<<
+     * 💎 Les deux formes d'absence se comportent a l'OPPOSE: `null` ferme la porte, `undefined` l'ouvre. */
+    const mk = (amountUsdc) => createPaywall({ payTo: WALLET, price: '5', subs: memSubs(), clock: () => 1_000_000,
+      verify: async () => ({ ok: true, payer: PAYER, amountUsdc }) });
+
+    for (const mauvais of [undefined, 'abc', NaN, {}]) {
+      const r = await mk(mauvais).settle({});
+      assert.equal(r.ok, false, 'montant ' + JSON.stringify(mauvais) + ' ne doit JAMAIS payer');
+      assert.match(r.reason, /no readable amount/, 'et le refus doit nommer sa cause: ' + r.reason);
+    }
+    // ⚖️ CAS OPPOSES: un montant LISIBLE garde exactement le comportement d'avant.
+    assert.equal((await mk('5').settle({})).ok, true, 'le montant correct passe toujours');
+    assert.equal((await mk('1').settle({})).ok, false, 'le sous-paiement reste refuse');
+    assert.equal((await mk(null).settle({})).ok, false, 'null vaut 0, donc sous-paye');
+  });
+
+  await t('a reported recipient that is not payTo is REFUSED, and an unreported one is DISCLOSED', async () => {
+    /* Le commentaire de settle() promettait « wrong recipient => no subscription » et RIEN n'etait
+     * compare a `cfg.payTo` — une garantie attribuee au verifieur injecte, dont le contrat documente
+     * (`{ok, payer, amountUsdc}`) ne porte meme pas le destinataire. On verifie donc ce qui est
+     * rapporte, et on DECLARE quand rien ne l'est, au lieu de promettre un controle qu'on ne fait pas. */
+    const mk = (extra) => createPaywall({ payTo: WALLET, price: '5', subs: memSubs(), clock: () => 1_000_000,
+      verify: async () => ({ ok: true, payer: PAYER, amountUsdc: '5', ...extra }) });
+
+    /* ⚠️ `OTHER`, pas une adresse ecrite a la main: mon premier jet utilisait '0x'+'99'.repeat(20),
+     * qui est EXACTEMENT la valeur de WALLET — le « cas d'ecart » n'en etait pas un et le test rougissait
+     * sur ma fixture, pas sur le code. Une constante nommee ne peut pas collisionner par inattention. */
+    const faux = await mk({ payTo: OTHER }).settle({});
+    assert.equal(faux.ok, false, 'un destinataire rapporte DIFFERENT doit etre refuse');
+    assert.match(faux.reason, /WRONG recipient/);
+
+    const bon = await mk({ payTo: WALLET }).settle({});
+    assert.equal(bon.ok, true);
+    assert.equal(bon.recipientChecked, true, 'rapporte et conforme: on peut dire qu on a verifie');
+
+    const muet = await mk({}).settle({});
+    assert.equal(muet.ok, true, 'un verifieur qui ne rapporte pas le destinataire n est pas casse');
+    assert.equal(muet.recipientChecked, false, 'mais on ne PRETEND pas avoir verifie');
+  });
+
   await t('a premium app with an unpaid caller returns the x402 402 challenge', async () => {
     let now = 1_000_000;
     const paywall = createPaywall({ payTo: WALLET, price: '5', subs: memSubs(), clock: () => now, verify: async (p) => ({ ok: true, payer: p.payer, amountUsdc: 5 }) });
