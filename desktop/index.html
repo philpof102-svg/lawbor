@@ -239,6 +239,15 @@ async function paintThread() {
       if (b.origin === 'bot') who += ' · bot';
       if (b.viaHuman) who += ' · via ' + L.view.shortAddr(b.viaHuman);
       if (b.score !== null) who += ' · score ' + b.score;
+      /* ⛔ NE JAMAIS PEINDRE UN EXPEDITEUR DECLARE COMME UN EXPEDITEUR PROUVE. `relay.js` livre
+       * `authenticated` explicitement « so the UI can tell a proven sender from a merely-claimed one
+       * instead of rendering both identically », et `node.js` stocke `probation` « so no read view can
+       * present them as vouched for ». Jusqu'au 2026-08-15 cette vue faisait les deux.
+       * ⚖️ On MARQUE le doute, on ne decore pas la certitude: un « ✓ verifie » sur chaque message
+       * fabrique une habitude qui rend le seul message NON marque invisible. Donc rien quand tout va
+       * bien, une mention quand ca ne va pas — et `null` (ligne anterieure au champ) n'accuse pas. */
+      if (b.authenticated === false) who += ' · NON VERIFIE (from est une revendication)';
+      if (b.probation) who += ' · en probation (aucun standing)';
       d.append(el('div', 'who', who), el('div', 'body', b.body));
       return d;
     }));

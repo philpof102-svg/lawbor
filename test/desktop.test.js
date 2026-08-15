@@ -177,6 +177,40 @@ t('the panel never injects message bodies as HTML (stored-XSS closed by construc
   assert.ok(/textContent/.test(PANEL), 'user data goes through textContent');
 });
 
+t('a merely-CLAIMED sender does not render identically to a PROVEN one', () => {
+  /* ⛔ DEUX COMMENTAIRES DU DEPOT DECRIVAIENT EXACTEMENT LE DEFAUT. `lib/relay.js` livre
+   * `authenticated` « so the UI can tell a proven sender from a merely-claimed one INSTEAD OF
+   * RENDERING BOTH IDENTICALLY »; `lib/node.js` stocke `probation` « so no read view can present them
+   * as vouched for ». Mesure du 2026-08-15: la ligne stockee portait bien authenticated:false et
+   * probation:true, et `bubble()` rendait id/side/who/body/origin/viaHuman/score/ts — ni l'un ni
+   * l'autre. Les deux phrases decrivaient ce que la vue faisait. */
+  const V = require('../desktop/lib/view.cjs');
+  const A = '0x' + 'aa'.repeat(20), B = '0x' + 'bb'.repeat(20);
+  const base = { id: 'e1', from: A, to: B, body: 'salut', ts: 1, origin: 'human', senderScore: 72 };
+
+  const prouve = V.bubble({ ...base, authenticated: true, probation: false }, B);
+  const declare = V.bubble({ ...base, authenticated: false, probation: false }, B);
+  assert.notDeepEqual(prouve, declare, 'prouve et declare ne peuvent pas rendre la MEME bulle');
+  assert.strictEqual(prouve.authenticated, true);
+  assert.strictEqual(declare.authenticated, false);
+
+  // probation: une AFFIRMATION quand elle est vraie — un probationnaire ne doit pas passer pour adoube.
+  assert.strictEqual(V.bubble({ ...base, authenticated: true, probation: true }, B).probation, true);
+
+  /* ⚖️ TROIS ETATS: une ligne ANTERIEURE au champ rend `null`, pas `false`. Les fondre accuserait de
+   * vieux messages sur notre propre incompletude — never-accuse-on-own-incompleteness. */
+  assert.strictEqual(V.bubble(base, B).authenticated, null,
+    'champ absent = « on ne sait pas », jamais « non verifie »');
+
+  // et le PANNEAU doit les peindre, sinon le mapper les porte pour personne.
+  assert.ok(/b\.authenticated === false/.test(PANEL), 'le panneau marque un expediteur non verifie');
+  assert.ok(/b\.probation/.test(PANEL), 'et un expediteur en probation');
+  /* ⚖️ On marque le DOUTE, pas la certitude: un « verifie » sur chaque message fabrique une habitude
+   * qui rend le seul message non marque invisible. Rien ne doit s afficher pour authenticated===true. */
+  assert.ok(!/authenticated === true/.test(PANEL),
+    'aucune decoration sur le cas sain — sinon le cas douteux se noie dans le bruit');
+});
+
 t('the panel SURFACES a damaged store instead of showing a silently short list', () => {
   /* ⛔ LE DERNIER KILOMETRE. `lib/store.js` calcule cinq etats et son en-tete nomme le prejudice qu'il
    * existe pour eviter — « the user concludes nobody wrote to them ». `server.js` les publie a /health

@@ -77,6 +77,22 @@ function bubble(m, self) {
     // provenance: a human-authored message relayed by a bot names the human it came from.
     viaHuman: m.viaHuman || null,
     score: Number.isFinite(m.senderScore) ? m.senderScore : null,
+    /* ⛔ DEUX CHAMPS QUI EXISTENT POUR CETTE VUE, ET QU'ELLE JETAIT. Mesure du 2026-08-15.
+     * `lib/relay.js` livre `authenticated` en disant pourquoi: « so the UI can tell a proven sender
+     * from a merely-claimed one INSTEAD OF RENDERING BOTH IDENTICALLY ». `lib/node.js` stocke
+     * `probation` en disant: « so no read view can present them as vouched for ». Les deux phrases
+     * decrivaient exactement ce que ce mapper faisait — il portait `origin`, `viaHuman` et `score`,
+     * jamais ces deux-la, donc un expediteur prouve par signature et un simplement DECLARE produisaient
+     * la MEME bulle, et un probationnaire etait indiscernable d'un pair adoube.
+     *
+     * ⚖️ TROIS ETATS, pas deux. `authenticated:false` veut dire « ce noeud tourne en
+     * allowUnauthenticated, `from` est une revendication »; `undefined` veut dire « cette ligne est
+     * anterieure au champ, on ne sait pas ». Les fondre en `false` accuserait de vieux messages sur
+     * notre propre incompletude. `null` porte le troisieme etat. */
+    authenticated: typeof m.authenticated === 'boolean' ? m.authenticated : null,
+    // `probation` est une AFFIRMATION quand il est vrai; absent ou faux ne prouve rien de plus qu'un
+    // silence, donc on ne rend `true` que sur une lecture stricte.
+    probation: m.probation === true,
     ts: m.ts,
   };
 }
