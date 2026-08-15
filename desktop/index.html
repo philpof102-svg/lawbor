@@ -132,6 +132,19 @@ function el(tag, cls, text) {
 }
 function show(nodes) { main.replaceChildren(...nodes); }
 function fail(e) { show([el('div', 'err', String(e && e.message || e))]); }
+/* Un avertissement PERSISTANT, au-dessus de la vue courante: `show()` remplace tout le contenu a chaque
+ * changement de vue, donc un message pousse dedans disparaitrait au premier clic. Celui-ci vit hors de
+ * `main` et survit a la navigation — c'est le point: un journal abime doit rester visible pendant qu'on
+ * parcourt une inbox qui a l'air vide. Idempotent: re-appeler remplace le texte, n'empile pas. */
+function banniere(texte) {
+  let n = document.getElementById('log-warn');
+  if (!n) {
+    n = el('div', 'err');
+    n.id = 'log-warn';
+    main.parentNode.insertBefore(n, main);
+  }
+  n.textContent = texte;   // textContent, comme tout le reste de ce fichier
+}
 
 async function paintJobs() {
   $('back').hidden = true; $('composer').hidden = true;
@@ -292,6 +305,23 @@ $('msg').onkeydown = (e) => { if (e.key === 'Enter') send(); };
     const h = await L.health();
     self = h.self || '';
     $('self').textContent = L.view.shortAddr(self) + ' · ' + h.peers + ' peer' + (h.peers === 1 ? '' : 's');
+    /* ⛔ UN JOURNAL ABIME DONNE UNE INBOX VIDE, ET C'EST LA PIRE CONFUSION DISPONIBLE.
+     * `lib/store.js` calcule cinq etats (absent / empty / ok / damaged / unreadable), son en-tete dit
+     * pourquoi — « the user concludes nobody wrote to them » — et `server.js` les publie a /health sous
+     * `logs`. Mesure du 2026-08-15: cette app lisait `h.self` et `h.peers`, et RIEN d'autre. Zero
+     * occurrence de `logs`/`damaged`/`unreadable` dans tout desktop/. Le producteur faisait le travail,
+     * le transport le portait, et la seule surface qu'un humain regarde le jetait.
+     * ⚖️ On n'affiche RIEN quand tout va bien: un bandeau permanent apprend a etre ignore. `absent` et
+     * `empty` sont des etats NORMAUX (noeud neuf, ou compact() qui n'a garde aucune ligne) — c'est
+     * `store.health().ok` qui tranche, jamais nous. */
+    const logs = h && h.logs;
+    if (logs && logs.ok === false) {
+      const m = (logs.messages && logs.messages.state) || 'unknown';
+      const perdues = (logs.messages && logs.messages.corruptLines) || 0;
+      banniere(m === 'damaged'
+        ? 'journal ABIME : ' + perdues + ' ligne(s) illisible(s) — des messages sont PERDUS. Une liste vide ici ne veut pas dire que personne n a ecrit.'
+        : 'journal ' + m.toUpperCase() + ' — le noeud n a pas pu lire son log. Une liste vide ici ne veut PAS dire que personne n a ecrit.');
+    }
   } catch (e) {
     $('self').textContent = 'node unreachable';
     return fail(new Error('no bot node at ' + L.base + ' — start it, or set LAWBOR_NODE_URL'));

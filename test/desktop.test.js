@@ -177,6 +177,25 @@ t('the panel never injects message bodies as HTML (stored-XSS closed by construc
   assert.ok(/textContent/.test(PANEL), 'user data goes through textContent');
 });
 
+t('the panel SURFACES a damaged store instead of showing a silently short list', () => {
+  /* ⛔ LE DERNIER KILOMETRE. `lib/store.js` calcule cinq etats et son en-tete nomme le prejudice qu'il
+   * existe pour eviter — « the user concludes nobody wrote to them ». `server.js` les publie a /health
+   * sous `logs`. Mesure du 2026-08-15: ce panneau lisait `h.self` et `h.peers`, et RIEN d'autre —
+   * zero occurrence de `logs`/`damaged`/`unreadable` dans tout desktop/. Le producteur faisait le
+   * travail, le transport le portait, la seule surface qu'un humain regarde le jetait.
+   * 💎 Et ce n'est pas « inbox vide »: mesure sur un log a 2 lignes dont 1 corrompue, `all()` rend 1.
+   * La liste est SILENCIEUSEMENT AMPUTEE, ce qu'aucun utilisateur ne peut deviner. */
+  assert.ok(/h\.logs|logs\.ok/.test(PANEL), 'le panneau doit LIRE l etat du journal publie par /health');
+  assert.ok(/corruptLines/.test(PANEL), 'et nommer le nombre de lignes perdues, pas seulement « erreur »');
+  /* ⚖️ Cas oppose: rien ne doit s afficher quand tout va bien — un bandeau permanent apprend a etre
+   * ignore. La condition doit donc etre sur `ok === false`, jamais sur la simple presence de `logs`. */
+  assert.ok(/logs\.ok === false/.test(PANEL),
+    'l avertissement est conditionne a ok===false: `absent` et `empty` sont des etats NORMAUX');
+  /* Le bandeau doit SURVIVRE au changement de vue: `show()` remplace tout le contenu de `main`, donc un
+   * message pousse dedans disparaitrait au premier clic — pendant qu on parcourt une liste amputee. */
+  assert.ok(/insertBefore\(n, main\)/.test(PANEL), 'l avertissement vit HORS de main, sinon show() l efface');
+});
+
 t('the renderer cannot aim a request at another host (base url pinned in the preload)', () => {
   assert.ok(!/\bfetch\s*\(/.test(PANEL), 'the panel has no raw fetch — only the bridged api');
   assert.ok(/CFG\.base \+ pathname/.test(PRELOAD), 'the preload prefixes every call with our own node');
