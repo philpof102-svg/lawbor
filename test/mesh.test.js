@@ -436,6 +436,38 @@ t('isPrivateAddress agrees with classifyUrl — the transport hook cannot fail o
     assert.equal(isPrivateAddress('2606:4700::1111'), false, 'a real public v6 address still passes');
   });
 
+  /* ── ★ LE CONTRAT DE LA TABLE EST ECRIT, ET PERSONNE NE L ASSERTAIT ────────────────────────────
+   * `const book = new Map();   // addr(lower) -> { url, source, … }`
+   * Cinq accesseurs le respectent (`book.get(lower(addr))`), UN ne le faisait pas: `tracesToAnchor`
+   * lisait `book.get(addr)` et `anchors.has(addr)` BRUTS.
+   * ⚖️ MESURE DU 2026-08-15: RIEN N ETAIT CASSE, et il faut le dire. Ses deux appelants passent des
+   * cles issues de `book` lui-meme, donc deja minuscules — il marchait par ACCIDENT DE L APPELANT,
+   * pas par contrat. La surface publique s est revelee, a la mesure, deja insensible a la casse.
+   * Ce cas FIGE cette propriete pour qu un futur appelant qui passerait une adresse telle qu elle
+   * arrive du reseau ne la perde pas en silence. */
+  await t('★ une adresse est la MEME quelle que soit sa casse, sur toute la surface publique', async () => {
+    const m = mk();
+    /* ⚠️ L INDEX DOIT PORTER DES LETTRES HEX. Premiere version: i = 4242, dont l hexa est `1092` —
+     * QUE des chiffres, donc majuscules et minuscules donnent la MEME chaine et le test ne mesurait
+     * rien. Le temoin ci-dessous l a attrape. */
+    const i = 0xabcdef;
+    const u = register(i);
+    const bas = addrOf(i);
+    const haut = '0x' + bas.slice(2).toUpperCase();
+    assert.notEqual(bas, haut, 'TEMOIN: les deux ecritures doivent differer comme chaines, sinon '
+      + 'ce cas ne mesure rien (un index sans lettre hex rend les deux casses identiques)');
+
+    const r = await m.addPeer(bas, u);
+    assert.ok(r && r.ok, 'le pair doit etre admis: ' + JSON.stringify(r));
+
+    for (const [q, note] of [[bas, 'minuscules'], [haut, 'MAJUSCULES']]) {
+      assert.equal(m.has(q), true, note + ': has() doit trouver le pair');
+      assert.equal(m.urlFor(q), u, note + ': urlFor() doit rendre la meme url');
+    }
+    // la lecture qui passe par tracesToAnchor doit rester lisible
+    assert.equal(typeof m.status().bootstrapDependent, 'boolean', 'status() doit rester lisible');
+  });
+
   console.log(`\n${pass} passed · ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
