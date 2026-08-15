@@ -129,6 +129,25 @@ t('the explained numbers MATCH creditFor exactly (direct + circle), for every su
   }
 });
 
+t('the explained INBOUND number matches creditFor.inbound too — the third twin, and it was UNGATED', () => {
+  /* creditFor returns direct, circle AND inbound; the parity test above asserts only direct + circle.
+   * `inbound` was added later (the two-node demo exposed a worker quoting a stranger-premium to a client
+   * who had just paid him). explainCredit.inboundMicro is its audit twin, and NOTHING asserted the two
+   * agree — so a future edit to either side would silently diverge the "verify it yourself" audit from
+   * the real rating, exactly the single-and-batch-twins-diverge failure this file is meant to be immune
+   * to. Mesure du 2026-08-15: they agree today, so this gates correct code rather than fixing a live
+   * divergence. Fixture with REAL inbound flow (the parity fixture above has none), cases opposes. */
+  const es = [edge(W, V, 300, 10, 1), edge(X, V, 150, 11, 2), edge(V, Y, 100, 12, 3), edge(Y, W, 80, 13, 4)];
+  const c = creditFor(V, es, { alpha: 0.5 });
+  for (const s of [W, X, Y]) {
+    const e = explainCredit(V, s, es, { alpha: 0.5 });
+    assert.equal(Number(e.inboundMicro), c.inbound.get(s) || 0, 'inbound matches for ' + s);
+  }
+  // temoin: la fixture DOIT exercer les DEUX etats, sinon un gate ou tout vaut 0 passerait a vide.
+  assert.ok((c.inbound.get(W) || 0) > 0, 'temoin: au moins un sujet a un inbound NON nul (W a paye V)');
+  assert.equal(c.inbound.get(Y) || 0, 0, 'temoin: et au moins un a un inbound NUL (Y n a jamais paye V)');
+});
+
 t('direct evidence is the RAW settlement edges V→W (txHash + jobId), summing to directMicro', () => {
   const es = [edge(V, W, 60, 10, 1), edge(V, W, 40, 11, 2), edge(V, X, 5, 12, 3)];
   const e = explainCredit(V, W, es, { alpha: 0.5 });
