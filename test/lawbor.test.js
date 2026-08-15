@@ -55,6 +55,32 @@ const down = async () => { throw new Error('mainstreet 503'); };
     const res = await r.accept(mkEnv(A, B, 'hello B'));
     assert.equal(res.action, 'deliver'); assert.equal(res.to, 'human'); assert.equal(res.senderScore, 72);
   });
+  await t('relay DEDUP: the unbounded `seen` set is DISCLOSED and its growth is OBSERVABLE', async () => {
+    /* `seen` grandit d'une entree par enveloppe, a vie, et c'est le choix CORRECT: evincer ferait
+     * re-livrer une vieille enveloppe au premier rejeu de gossip. Ce qui manquait etait de le DIRE et
+     * de le rendre mesurable — lib/mesh.js borne son memo explicitement (« bounded: drop oldest »),
+     * meme depot, meme classe de structure, et ici rien n'annoncait la croissance. Sans compteur, une
+     * croissance qu'on ne peut pas mesurer ne se decide pas. */
+    const r = createRelay({ self: B, preflight: proceed, peers: [A, C] });
+    assert.equal(r.seenCount, 0, 'un relais neuf n a rien vu');
+    assert.equal(r.seenIsBounded, false, 'le Set par defaut est NON borne, et le dit');
+
+    await r.accept(mkEnv(A, B, 'un'));
+    assert.equal(r.seenCount, 1, 'une enveloppe acceptee est comptee');
+    await r.accept(mkEnv(A, B, 'deux'));
+    assert.equal(r.seenCount, 2, 'la croissance est visible, pas un instantane fige a la construction');
+
+    // ⛔ CAS OPPOSE 1: un DROP ne doit RIEN retenir — sinon un expediteur refuse ferait grossir la
+    // memoire du relais gratuitement, ce qui serait un vecteur d'epuisement au lieu d'un dedup.
+    const bas = createRelay({ self: B, preflight: lowScore, peers: [A] });
+    assert.equal((await bas.accept(mkEnv(A, B, 'spam'))).action, 'drop');
+    assert.equal(bas.seenCount, 0, 'une enveloppe REFUSEE n entre pas dans le dedup');
+
+    // ⛔ CAS OPPOSE 2: un Set INJECTE rend la politique a l operateur — on ne pretend pas la connaitre.
+    const inj = createRelay({ self: B, preflight: proceed, peers: [A], seen: new Set() });
+    assert.equal(inj.seenIsBounded, null, 'seen injecte: la politique appartient a l operateur, pas a nous');
+  });
+
   await t('relay REPUTATION GATE: low score → DROP (anti-spam, safe-to-talk)', async () => {
     const r = createRelay({ self: B, preflight: lowScore, peers: [A] });
     const res = await r.accept(mkEnv(A, B, 'spam'));
