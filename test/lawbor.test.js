@@ -90,6 +90,36 @@ const down = async () => { throw new Error('mainstreet 503'); };
     assert.equal(JSON.stringify(signablePayload(jumeau).message), sOrig, 'meme entree -> memes bytes signes');
   });
 
+  await t('relay LOOP BOUND: it is DEDUP that stops infinite circulation, not the hop cap', async () => {
+    /* ⚠️ L'en-tete creditait le plafond de « no infinite relay loops ». `hops` n'est ni signe ni dans
+     * l'id — il ne PEUT pas l'etre, chaque relais l'incremente — donc un relais hostile le remet a 0.
+     * Mesure du 2026-08-15: le plafond borne UN CHEMIN TEL QU'IL SE DECLARE; c'est le dedup qui borne
+     * la circulation (un id passe une fois par relais, donc au plus N relais dans un mesh de N).
+     * ⛔ Ce test existe pour que rendre `seen` evictant ROUGISSE: ca rouvrirait la boucle, et le
+     * plafond ne rattraperait rien. */
+    const env = mkEnv(A, C, 'en transit');
+
+    // (a) le plafond FAIT son travail sur une chaine honnete
+    const neuf = createRelay({ self: B, preflight: proceed, peers: [A, C], maxHops: 6 });
+    const trop = await neuf.accept({ ...env, hops: 7 });
+    assert.equal(trop.action, 'drop');
+    assert.match(trop.reason, /hop cap/, 'une chaine honnete trop longue est bien coupee');
+
+    // (b) mais un relais hostile qui remet hops a 0 est arrete par le DEDUP, pas par le plafond
+    const r = createRelay({ self: B, preflight: proceed, peers: [A, C], maxHops: 6 });
+    assert.equal((await r.accept({ ...env, hops: 3 })).action, 'forward', 'premier passage: relaye');
+    const rejeu = await r.accept({ ...env, hops: 0 });
+    assert.equal(rejeu.action, 'drop');
+    assert.match(rejeu.reason, /already seen/,
+      'c est le DEDUP qui refuse le rejeu, pas le plafond — hops=0 le passerait');
+
+    // (c) TEMOIN de la borne: un relais qui ne l a jamais vue RELAYE l enveloppe a hops remis a zero.
+    // Sans ce cas, on croirait que le plafond protege quelque chose qu il ne protege pas.
+    const jamaisVue = createRelay({ self: B, preflight: proceed, peers: [A, C], maxHops: 6 });
+    assert.equal((await jamaisVue.accept({ ...env, hops: 0 })).action, 'forward',
+      'le plafond n arrete PAS une enveloppe dont hops a ete remis a zero: seul le dedup la borne');
+  });
+
   await t('relay DEDUP: the unbounded `seen` set is DISCLOSED and its growth is OBSERVABLE', async () => {
     /* `seen` grandit d'une entree par enveloppe, a vie, et c'est le choix CORRECT: evincer ferait
      * re-livrer une vieille enveloppe au premier rejeu de gossip. Ce qui manquait etait de le DIRE et
