@@ -177,6 +177,39 @@ t('the panel never injects message bodies as HTML (stored-XSS closed by construc
   assert.ok(/textContent/.test(PANEL), 'user data goes through textContent');
 });
 
+t('a SETTLED job is not labelled "negotiated only", and its delivery verdict is carried', () => {
+  /* ⛔ UNE PHRASE JUSTE POUR UN ETAT, SERVIE A TOUS. La note existe pour qu'un badge « awarded » ne se
+   * lise jamais « paid » — et elle etait emise a l'identique sur CHAQUE ligne, `settled` compris.
+   * Mesure du 2026-08-15: un job REGLE, avec un transfert USDC verifie contre Base, affichait
+   * « negotiated only — no funds held or released ». C'est le sens INVERSE du defaut d'origine.
+   * Et `work.js` attache `delivery` AU reglement « so a reader never has to dig through claims to
+   * learn that PAID does not mean DELIVERED on this row » — la vue le jetait. */
+  const V = require('../desktop/lib/view.cjs');
+  const A = '0x' + 'aa'.repeat(20), W = '0x' + 'cc'.repeat(20);
+  const mk = (state, delivery) => ({ jobId: 'j', task: 't', state, requester: A, bids: [], at: 1,
+    award: { worker: W, price: '500 USDC', corroborated: true },
+    settlement: delivery ? { delivery, deliveryReason: 'raison' } : null });
+
+  const regle = V.jobRow(mk('settled', 'substituted'), A, Date.now());
+  assert.ok(!/negotiated only/.test(regle.settlement),
+    'un job PAYE ne peut pas etre etiquete « negotiated only »: ' + regle.settlement);
+  assert.match(regle.settlement, /never means DELIVERED/, 'et paye ne doit jamais se lire livre');
+  assert.strictEqual(regle.delivery, 'substituted', 'le verdict de livraison doit remonter');
+
+  /* ⚖️ CAS OPPOSE: la phrase d origine reste EXACTE la ou elle l a toujours ete. Sans ceci, remplacer
+   * la note partout passerait ce test tout en cassant la protection « awarded ne lit pas paid ». */
+  for (const etat of ['open', 'awarded']) {
+    const r = V.jobRow(mk(etat, null), A, Date.now());
+    assert.match(r.settlement, /negotiated only/, etat + ' doit garder la note d origine');
+    assert.strictEqual(r.delivery, null, etat + ': aucun reglement, donc aucun verdict de livraison');
+  }
+
+  /* `unverifiable` est RENDU, et ce n est pas un oubli: work.js tranche explicitement — « a buyer needs
+   * to know it never had the means to check rather than believe it passed a check ». */
+  assert.strictEqual(V.jobRow(mk('settled', 'unverifiable'), A, Date.now()).delivery, 'unverifiable');
+  assert.ok(/row\.delivery/.test(PANEL), 'et le panneau doit le peindre, sinon la vue le porte pour personne');
+});
+
 t('a merely-CLAIMED sender does not render identically to a PROVEN one', () => {
   /* ⛔ DEUX COMMENTAIRES DU DEPOT DECRIVAIENT EXACTEMENT LE DEFAUT. `lib/relay.js` livre
    * `authenticated` « so the UI can tell a proven sender from a merely-claimed one INSTEAD OF

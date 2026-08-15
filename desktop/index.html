@@ -163,7 +163,13 @@ async function paintJobs() {
       let line = row.state === 'awarded'
         ? '→ ' + row.winner + ' · ' + row.price + (row.unconfirmed ? ' · bid unseen' : '')
         : row.bids + ' bid' + (row.bids === 1 ? '' : 's') + (row.best ? ' · best ' + row.best : '');
-      d.append(top, el('div', 'prev', line), el('div', 'note', row.settlement));
+      /* PAID n'est pas DELIVERED, et la ligne doit le porter. `work.js` attache le verdict de
+       * livraison AU reglement « so a reader never has to dig through claims »; il est rendu ici sur
+       * les lignes reglees, y compris quand il vaut `unverifiable` — work.js dit pourquoi: un acheteur
+       * doit savoir qu'il n'a JAMAIS eu le moyen de verifier, plutot que de croire qu'un controle est
+       * passe. Aucun texte invente: on affiche le mot du module. */
+      const note = row.delivery ? row.settlement + ' · livraison: ' + row.delivery : row.settlement;
+      d.append(top, el('div', 'prev', line), el('div', 'note', note));
       return d;
     }));
   } catch (e) { fail(e); }

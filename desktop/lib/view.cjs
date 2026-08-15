@@ -117,7 +117,28 @@ function jobRow(j, self, now) {
     // an award whose bid we never saw is shown as such rather than silently equated with a real one
     unconfirmed: !!(j.award && j.award.corroborated === false),
     when: relTime(j.at, now),
-    settlement: 'negotiated only — no funds held or released',
+    /* ⛔ UNE PHRASE JUSTE POUR UN ETAT, SERVIE A TOUS LES ETATS, DEVIENT FAUSSE DANS UN AUTRE.
+     * Cette note existe pour qu'un badge « awarded » ne se lise jamais « paid » — et elle etait emise
+     * a l'identique sur CHAQUE ligne, `settled` compris. Mesure du 2026-08-15 sur un job REGLE: la
+     * ligne affichait « negotiated only — no funds held or released » alors qu'un transfert USDC
+     * VERIFIE contre Base existait. « negotiated only » dit qu'aucun reglement n'a eu lieu: c'est le
+     * sens INVERSE du defaut d'origine, et tout aussi faux.
+     * ⚖️ « no funds held or released » reste vrai de LAWBOR (non-custodial) dans les deux cas — seul
+     * « negotiated only » ment sur une ligne payee. On garde donc la phrase d'origine partout SAUF sur
+     * `settled`, ou l'on dit le fait mesure, avec les mots de work.js: « settled means paid — never
+     * delivered, never that the work was any good ». */
+    settlement: j.state === 'settled'
+      ? 'PAID on-chain (chain-verified) — never means DELIVERED; LAWBOR held no funds'
+      : 'negotiated only — no funds held or released',
+    /* LE VERDICT DE LIVRAISON, porte par work.js SUR le reglement « so a reader never has to dig
+     * through claims to learn that PAID does not mean DELIVERED on this row » — et jete ici jusqu'au
+     * 2026-08-15. Trois etats: 'served' (ce qui est arrive hashe l'engagement pris AVANT le paiement),
+     * 'substituted' (il ne l'hashe PAS), 'unverifiable' (l'award n'a engage aucun hash).
+     * ⚖️ On le rend MEME quand il vaut 'unverifiable': work.js dit explicitement pourquoi — « a buyer
+     * needs to know it never had the means to check rather than believe it passed a check ». C'est le
+     * module qui a tranche cet arbitrage, pas cette vue. */
+    delivery: (j.settlement && j.settlement.delivery) || null,
+    deliveryReason: (j.settlement && j.settlement.deliveryReason) || null,
   };
 }
 
