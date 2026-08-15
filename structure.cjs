@@ -37,9 +37,17 @@ const norm = (s) => String(s).replace(/\r\n/g, '\n');          // a CRLF checkou
 
 let FAIL_CLOSED = async () => {};
 const checks = [];
-const record = (id, expected, actual, note) => {
-  const ok = JSON.stringify(expected) === JSON.stringify(actual);
-  checks.push({ id, ok, expected, actual, note });
+/* `opts.unverified` — le TROISIEME etat, mesure le 2026-08-15. Le repli « npm pack unavailable »
+ * mettait la MEME chaine dans expected et actual: ok devenait TRUE et le rapport humain montrait un ✓
+ * sur un check qui n'avait RIEN verifie — alors que le commentaire d'a cote disait « reported as such
+ * rather than assumed green ». L'intention contredisait le rendu. Un check non verifie n'est ni vert
+ * ni casse: il porte son propre glyphe (?), reste hors du compte `failed` (une machine sans npm ne doit
+ * pas crier faux — la lecon du check lib.files retire), et entre dans la chaine canonique sous l'etat
+ * UNVERIFIED pour que deux machines aux capacites differentes divergent DANS l'empreinte. */
+const record = (id, expected, actual, note, opts = {}) => {
+  const unverified = opts.unverified === true;
+  const ok = !unverified && JSON.stringify(expected) === JSON.stringify(actual);
+  checks.push({ id, ok, unverified, expected, actual, note });
   return ok;
 };
 
@@ -236,8 +244,23 @@ const TX = (n) => '0x' + String(n).padStart(64, '0');
 // ---------------------------------------------------------------------------------------------
 {
   const pkg = JSON.parse(norm(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')));
-  record('pkg.bins', ['lawbor-bot', 'lawbor-mcp', 'lawbor-node', 'lawbor-try'], Object.keys(pkg.bin || {}).sort(),
-    'npx resolves a bin whose NAME matches the package — lawbor-bot must exist or `npx lawbor-bot` cannot run; lawbor-try is the zero-config onramp');
+  /* ⚠️ CE CHECK ETAIT LA MEME MALADIE QUE `lib.files`, RETIRE PLUS HAUT POUR CETTE RAISON PRECISE.
+   * Il epinglait la liste EXACTE des bins; le 2026-08-15, `lawbor-signed-node` avait ete ajoute au
+   * package.json (le fichier existe, l'ajout est deliberre) et l'outil criait « 1 invariant broken »
+   * sur un arbre SAIN — une fausse divergence fabriquee, dans l'outil dont toute la sortie EST la
+   * divergence. L'INVARIANT de la note n'a jamais ete « exactement quatre »: c'est (a) les bins
+   * DOCUMENTES existent — `npx lawbor-bot` doit resoudre, `lawbor-try` est l'onramp — et (b) chaque
+   * bin declare pointe sur un fichier PRESENT dans l'arbre (un bin casse ne se voit qu'au premier
+   * `npx` d'un inconnu). Un bin SUPPLEMENTAIRE est une decision d'operateur, pas une rupture. */
+  const bins = pkg.bin || {};
+  const requis = ['lawbor-bot', 'lawbor-mcp', 'lawbor-node', 'lawbor-try'];
+  const binsCasses = [
+    ...requis.filter((b) => !(b in bins)).map((b) => 'missing:' + b),
+    ...Object.entries(bins).filter(([, p]) => !fs.existsSync(path.join(__dirname, p)))
+      .map(([b, p]) => 'broken:' + b + '->' + p),
+  ];
+  record('pkg.bins-resolve', [], binsCasses,
+    'the DOCUMENTED bins exist (npx lawbor-bot must resolve; lawbor-try is the zero-config onramp) and every declared bin points at a file present in the tree — an EXTRA bin is an operator decision, not a break');
   record('pkg.no-hard-deps', [], Object.keys(pkg.dependencies || {}),
     'a hard dependency would break the zero-dependency claim the core makes');
   /* AND THE OTHER HALF, which the previous version quietly did not check: viem must actually BE in
@@ -258,10 +281,17 @@ const TX = (n) => '0x' + String(n).padStart(64, '0');
       { cwd: __dirname, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], shell: process.platform === 'win32' });
     packed = new Set((JSON.parse(out)[0].files || []).map((f) => String(f.path).replace(/\\/g, '/')));
   } catch (e) { packed = null; }
-  record('pkg.ships-what-it-promises',
-    packed ? [] : ['npm pack unavailable — UNVERIFIED, and reported as such rather than assumed green'],
-    packed ? mustShip.filter((f) => !packed.has(f)) : ['npm pack unavailable — UNVERIFIED, and reported as such rather than assumed green'],
-    'what the TARBALL contains, read from `npm pack --dry-run --json` — not what package.json intends to contain');
+  /* ⚠️ Le repli « unavailable » mettait la MEME chaine des deux cotes: ok=true, ✓ au rapport — un vert
+   * sur un check qui n'avait rien verifie, sous un commentaire qui promettait le contraire. Le
+   * troisieme etat de `record` porte desormais ce cas: ni vert, ni casse, et visible. */
+  if (packed) {
+    record('pkg.ships-what-it-promises', [], mustShip.filter((f) => !packed.has(f)),
+      'what the TARBALL contains, read from `npm pack --dry-run --json` — not what package.json intends to contain');
+  } else {
+    record('pkg.ships-what-it-promises', [], ['npm pack unavailable on this machine — nothing was verified'],
+      'what the TARBALL contains, read from `npm pack --dry-run --json` — not what package.json intends to contain',
+      { unverified: true });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -271,21 +301,24 @@ const TX = (n) => '0x' + String(n).padStart(64, '0');
 await FAIL_CLOSED();
 // ---------------------------------------------------------------------------------------------
 // ---------------------------------------------------------------------------------------------
-const canonical = checks.map((c) => c.id + '=' + (c.ok ? 'OK' : 'FAIL') + ':' + JSON.stringify(c.actual)).join('\n');
+const canonical = checks.map((c) => c.id + '=' + (c.unverified ? 'UNVERIFIED' : c.ok ? 'OK' : 'FAIL') + ':' + JSON.stringify(c.actual)).join('\n');
 const FINGERPRINT = sha(canonical);
-const failed = checks.filter((c) => !c.ok);
+const failed = checks.filter((c) => !c.ok && !c.unverified);
+const unverified = checks.filter((c) => c.unverified);
 
 if (process.argv.includes('--json')) {
   console.log(JSON.stringify({ fingerprint: FINGERPRINT, checks, failed: failed.length }, null, 1));
 } else {
   console.log('\nLAWBOR structure — invariants, and a fingerprint a second machine can falsify\n');
   for (const c of checks) {
-    console.log('  ' + (c.ok ? '✓' : '✗') + ' ' + c.id);
+    console.log('  ' + (c.unverified ? '?' : c.ok ? '✓' : '✗') + ' ' + c.id);
     console.log('      ' + c.note);
-    if (!c.ok) console.log('      expected ' + JSON.stringify(c.expected) + '\n      actual   ' + JSON.stringify(c.actual));
+    if (c.unverified) console.log('      UNVERIFIED: ' + JSON.stringify(c.actual));
+    else if (!c.ok) console.log('      expected ' + JSON.stringify(c.expected) + '\n      actual   ' + JSON.stringify(c.actual));
   }
   console.log('\n  FINGERPRINT  ' + FINGERPRINT);
-  console.log('  ' + (failed.length ? '❌ ' + failed.length + ' invariant(s) broken' : '✅ all invariants hold'));
+  console.log('  ' + (failed.length ? '❌ ' + failed.length + ' invariant(s) broken' : '✅ all invariants hold')
+    + (unverified.length ? ' · ⚠ ' + unverified.length + ' check(s) UNVERIFIED on this machine — neither green nor broken' : ''));
   console.log('\n  Compare the fingerprint with the other operator. Identical = the two machines compute the');
   console.log('  same structure. Different = run with --json and diff; the first differing check is the finding.\n');
 }
