@@ -115,6 +115,60 @@ t('⚖️ TEMOIN — un jobId ordinaire reste LISIBLE (l echappeur ne detruit pa
   assert.ok(String(ecrit).indexOf('&amp;') < 0, 'et sans echappement parasite: ' + ecrit);
 });
 
+/* ── ET LE SCHEMA, QUE L ECHAPPEMENT NE REGARDE PAS ──────────────────────────────────────────────
+ * `ref` (help_wanted, offer) et `deliverable` (settle) viennent AUSSI du pair — str(x, 200) — et
+ * lib/work.js les documente lui-meme comme « an OPAQUE pointer: LAWBOR never fetches, resolves or
+ * judges it » et « NOT verified ». La carte de job en faisait pourtant un <a href> CLIQUABLE.
+ * MESURE DU 2026-08-15 sur l expression de rendu d alors:
+ *     javascript:alert(1)       -> href="javascript:alert(1)"   INTACT, cliquable
+ *     JaVaScRiPt:alert(1)       -> intact (la casse ne protege pas)
+ *     data:text/html,<script>…  -> les <> echappes, le SCHEMA data: survit
+ * esc() protege le CONTENANT — attribut, balise — jamais le SCHEMA: un javascript: n a rien
+ * d invalide en HTML, donc il franchit toutes les portes HTML.
+ * ⚖️ Le correctif ne JETTE pas la valeur: un pointeur non-web reste AFFICHE en texte. C est plus
+ * fidele a ce que le module en dit qu un lien, et l utilisateur voit toujours ce que le pair a
+ * ecrit — sans pouvoir l executer d un clic. */
+const BACKSLASH = String.fromCharCode(92);
+const servi = (s) => s.split(BACKSLASH + BACKSLASH).join(BACKSLASH);
+const blocDe = (src, nom) => {
+  const i = src.indexOf('function ' + nom + '(');
+  if (i < 0) return null;
+  return servi(src.slice(i, src.indexOf('\n}', i) + 2));
+};
+
+t('★ un pointeur de pair qui n est PAS http(s) ne devient jamais un href', () => {
+  const src = lire('messenger.js');
+  const esc = escDePage(src);
+  const garde = blocDe(src, 'estLienWeb');
+  const point = blocDe(src, 'pointeur');
+  assert.ok(esc && garde && point,
+    'apps/messenger.js n a plus de helper `pointeur` + `estLienWeb`: les pointeurs opaques du pair '
+    + 'repartent directement dans un href, et esc() ne regarde pas le schema.');
+  // eslint-disable-next-line no-new-func
+  const rendre = new Function('u', esc + '\n' + garde + '\n' + point + '\nreturn pointeur(u);');
+  for (const hostile of ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', 'data:text/html,x',
+    'vbscript:x', ' javascript:alert(1)', 'JAVASCRIPT:alert(1)']) {
+    const out = String(rendre(hostile));
+    assert.ok(out.indexOf('href=') < 0,
+      'schema ' + JSON.stringify(hostile) + ' rendu comme un LIEN CLIQUABLE: ' + out);
+    assert.ok(out.indexOf('<span') === 0, 'il doit rester AFFICHE en texte, pas disparaitre: ' + out);
+  }
+});
+
+t('⚖️ TEMOIN — un pointeur http(s) reste un vrai lien (la garde ne casse pas l usage normal)', () => {
+  /* ⛔ Sans ce temoin, une garde qui refuserait TOUT lien passerait le cas precedent en beaute et
+   * casserait la seule chose que ces champs servent a faire: pointer un PR ou une issue. */
+  const src = lire('messenger.js');
+  // eslint-disable-next-line no-new-func
+  const rendre = new Function('u', escDePage(src) + '\n' + blocDe(src, 'estLienWeb') + '\n'
+    + blocDe(src, 'pointeur') + '\nreturn pointeur(u);');
+  for (const bon of ['https://github.com/org/repo/pull/7', 'http://exemple.test/x']) {
+    const out = String(rendre(bon));
+    assert.ok(out.indexOf('href="' + bon + '"') >= 0, 'un lien web doit rester cliquable: ' + out);
+    assert.ok(out.indexOf('rel="noopener noreferrer"') >= 0, 'et garder son rel de sortie: ' + out);
+  }
+});
+
 /* ── RECENSEMENT: aucune page ne doit ecrire dans innerHTML sans jamais echapper. ─────────────────
  * ⚠️ Ce contrôle est TEXTUEL et il ne dit pas que chaque valeur est echappee — seulement qu un
  * fichier qui construit du HTML connait son echappeur. Un fichier qui n echappe RIEN est une

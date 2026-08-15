@@ -168,11 +168,42 @@ function usdc(micro){
   var whole=s.slice(0,-6), frac=s.slice(-6).replace(/0+$/,'');
   return whole+(frac?'.'+frac:'')+' USDC';
 }
+/* ⛔ UN POINTEUR QUE LAWBOR DECLARE NE JAMAIS RESOUDRE NE DOIT PAS DEVENIR UN LIEN CLIQUABLE.
+ * Les champs ref (help_wanted, offer) et deliverable (settle) sont FOURNIS PAR LE PAIR: lib/work.js
+ * les passe par str(x, 200) — trim et troncature, aucune neutralisation — et les documente lui-meme
+ * comme « an OPAQUE pointer: LAWBOR never fetches, resolves or judges it » et « NOT verified ».
+ * Cette carte en faisait un <a href> que l utilisateur clique.
+ *
+ * MESURE DU 2026-08-15, en executant l expression de rendu extraite de ce fichier:
+ *     javascript:alert(1)            -> href="javascript:alert(1)"        INTACT, cliquable
+ *     JaVaScRiPt:alert(1)            -> href="JaVaScRiPt:alert(1)"        intact
+ *     data:text/html,<script>…       -> les <> echappes, le SCHEMA data: survit
+ *     https://github.com/org/repo/7  -> correct (temoin)
+ * esc() protege le CONTENANT — l attribut, la balise — jamais le SCHEMA: un "javascript:" n a rien
+ * d invalide en HTML, il passe donc toutes les portes HTML.
+ *
+ * ⚖️ ON NE JETTE PAS LA VALEUR: un pointeur non-web reste AFFICHE, en TEXTE. C est plus fidele a ce
+ * que le module en dit (un pointeur opaque, non verifie) que d en faire un lien — et l utilisateur
+ * voit toujours ce que le pair a ecrit, sans pouvoir l executer d un clic.
+ * ⛔ Aucune regex ici, volontairement: ce bloc vit dans le template literal PAGE, ou une barre
+ * oblique echappee du SOURCE ("\\/") n est pas celle du texte SERVI ("\/") — piege paye ce jour meme
+ * en instrumentant ce defaut. indexOf ne ment pas. */
+function estLienWeb(u){
+  var v=String(u||'').trim().toLowerCase();
+  return v.indexOf('http://')===0 || v.indexOf('https://')===0;
+}
+function pointeur(u){
+  var v=String(u||'').trim();
+  if(!estLienWeb(v)) return '<span title="not a web link — shown as text, never clickable">'+esc(v)+'</span>';
+  var i=v.indexOf('://');
+  return '<a href="'+esc(v)+'" target="_blank" rel="noopener noreferrer">'+esc(v.slice(i+3))+'</a>';
+}
+
 function jobCard(w, mine, from, tags){
   var head={help_wanted:'JOB OFFERED', bid:'BID', award:'AWARDED', cancel:'CANCELLED', settle:'PAID'}[w.kind]||w.kind;
   var body='';
   if(w.kind==='help_wanted') body=esc(w.task||'')
-    +(w.ref?'<div class="id">code: <a href="'+esc(w.ref)+'" target="_blank" rel="noopener noreferrer">'+esc(w.ref.replace(/^https?:\\/\\//,''))+'</a></div>':'')
+    +(w.ref?'<div class="id">code: '+pointeur(w.ref)+'</div>':'')
     +(w.dependsOn&&w.dependsOn.length?'<div class="id">waits on: '+esc(w.dependsOn.join(', '))+'</div>':'');
   else if(w.kind==='bid') body=esc(w.price||'')+(w.eta?' · '+esc(w.eta):'');
   else if(w.kind==='award') body='to '+esc(short(w.worker))+' · '+esc(w.price||'');
@@ -182,7 +213,7 @@ function jobCard(w, mine, from, tags){
     // The state shown is the fold's, never the sender's word: an unverified claim must not look paid.
     var v=(jobState[w.jobId]==='settled');
     body=usdc(w.amountMicro)
-      +(w.deliverable?'<div class="id">for: <a href="'+esc(w.deliverable)+'" target="_blank" rel="noopener noreferrer">'+esc(w.deliverable.replace(/^https?:\\/\\//,''))+'</a> (unverified pointer)</div>':'')
+      +(w.deliverable?'<div class="id">for: '+pointeur(w.deliverable)+' (unverified pointer)</div>':'')
       +'<div class="id">'+(v?'✓ verified on Base':'⏳ not verified here yet — confers nothing')+'</div>'+
          '<div class="id"><a href="https://basescan.org/tx/'+esc(w.txHash||'')+'" target="_blank" rel="noopener noreferrer">'+esc(short(w.txHash||''))+'</a></div>'+
          '<div class="id" style="opacity:.7">paid — not delivered, and not a judgement of the work</div>';
