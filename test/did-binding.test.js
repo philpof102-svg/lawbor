@@ -95,6 +95,33 @@ t('★ le cas OPPOSE: la meme attestation AVANT son expiration passe', async () 
   assert.strictEqual(r.bound, true, 'temoin: sinon `expiry` refuserait tout le monde et le test ci-dessus');
 });
 
+/* ── SANS HORLOGE N'EST PAS « PAS PERIMEE » ─────────────────────────────────────────────────────────
+ * Mesure du 2026-08-16: l'ancien defaut `now = 0` (l'an 1970) rendait `0 >= expiry` toujours faux —
+ * une attestation expiree en nov. 2023, jugee SANS opts par un consommateur direct de l'export npm,
+ * sortait `bound: true, "liaison bidirectionnelle verifiee"`. Tous les cas d'ici passaient `now: 1`
+ * explicitement: la fixture fournissait ce que l'appelant reel omet. La production etait saine
+ * (makeLireLiaison injecte Date.now) — le piege etait dans le paquet. */
+
+t('★ expiry PRESENT + horloge ABSENTE: on REFUSE de juger, on ne juge pas avec 1970', async () => {
+  const r = await jugerLiaison({ ...OK, expiry: 1000 }, { verifier: ouiVerif });
+  assert.strictEqual(r.bound, false, 'l ancien defaut rendait true ici — le fail-open exact de l expiry');
+  assert.ok(/AUCUNE horloge/.test(r.raison), r.raison);
+  assert.ok(!/EXPIREE/.test(r.raison), 'on ne pretend pas non plus qu elle est perimee: c est INDECIDABLE');
+});
+
+t('★ meme refus pour une horloge fournie mais illisible (NaN, 0): pas un jugement', async () => {
+  for (const mauvaise of [NaN, 0, 'abc']) {
+    const r = await jugerLiaison({ ...OK, expiry: 1000 }, { now: mauvaise, verifier: ouiVerif });
+    assert.strictEqual(r.bound, false, 'now=' + String(mauvaise));
+    assert.ok(/AUCUNE horloge/.test(r.raison), 'now=' + String(mauvaise) + ': ' + r.raison);
+  }
+});
+
+t('TEMOIN: une attestation SANS expiry se juge sans horloge — la purete ne coute rien au cas simple', async () => {
+  const r = await jugerLiaison({ ...OK, expiry: 0 }, { verifier: ouiVerif });
+  assert.strictEqual(r.bound, true, 'aucune expiry a juger, aucune horloge requise');
+});
+
 t('★ « pas d expiration » est un cas DISTINCT, signale et non silencieux', async () => {
   const r = await jugerLiaison({ ...OK, expiry: 0 }, { now: 1, verifier: ouiVerif });
   assert.strictEqual(r.bound, true, 'on ne l interdit pas...');
@@ -158,7 +185,8 @@ t('sans magasin, le module REFUSE de se construire', async () => {
   assert.throws(() => makeLireLiaison({}), /magasin.*requis/i);
 });
 
-const ATTENDUS = 15;
+/* 15 -> 18 le 2026-08-16: les trois cas « sans horloge n est pas pas-perimee ». */
+const ATTENDUS = 18;
 Promise.all(encours).then(() => {
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   if (pass + fail !== ATTENDUS) {
