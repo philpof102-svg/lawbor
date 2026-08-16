@@ -245,6 +245,12 @@ function build(deps = {}) {
       const r = store.compact();
       if (r.state === 'unreadable') {
         console.error(`[lawbor] COMPACT COULD NOT READ THE STORE: ${r.detail}. This is NOT an empty log — go look.`);
+      } else if (r.state === 'raced') {
+        /* Quatrieme issue, et elle doit crier autant que les trois autres. Renoncer a compacter est
+         * SANS DANGER — le log est intact. Mais « un autre processus ecrit dans ce store » est une
+         * condition d'exploitation qu'un operateur doit connaitre: c'est elle qui perdait des messages
+         * avant la garde (mesure du 2026-08-16: 49 sur 60, sur un log de 40 000 lignes). */
+        console.error(`[lawbor] COMPACT ABORTED — ANOTHER PROCESS IS WRITING TO THIS STORE: ${r.detail}`);
       } else if (r.corruptLines) {
         console.error(`[lawbor] compacted store: ${r.corruptLines} unparseable line(s) DROPPED FOR GOOD — messages were already lost before this boot`);
       }
