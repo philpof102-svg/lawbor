@@ -93,7 +93,31 @@ if ! reg_out="$(gl register 2>&1)"; then
 EOF
     exit 2
   fi
-  echo "· register returned non-zero (often = already registered) — continuing"
+  # ⛔ "REGISTER FAILED" USED TO READ AS "ALREADY REGISTERED", AND THE DIFFERENCE IS THE PUSH COUNTER.
+  #    Measured 2026-08-16 with a stubbed gl: a node-down ECONNREFUSED on `gl register` sailed through
+  #    this branch ("often = already registered — continuing"), the mirror ran, and the script ended on
+  #    the same "✅ … standing preserved" line as a real republish. Every failure the grep above does
+  #    not name — network down, node 500, DNS, TLS, a typoed GITLAWB_NODE — read as success in a
+  #    PUBLISH path. Same doctrine as the identity branch one paragraph up: refusing costs a re-run;
+  #    guessing costs the account. So: the node SAYING "already" continues; everything else STOPS and
+  #    shows the output; an operator who knows better says so explicitly.
+  if echo "$reg_out" | grep -qi "already"; then
+    echo "· node says this DID is already registered — continuing"
+  elif [ "${GITLAWB_ASSUME_REGISTERED:-}" = "1" ]; then
+    echo "· GITLAWB_ASSUME_REGISTERED=1 — operator override: continuing DESPITE an unrecognised register failure"
+  else
+    cat >&2 <<EOF
+
+⛔ gl register FAILED and its output does not say "already registered". Mirroring anyway would
+   publish against a node that never accepted this DID — and the success line at the end would
+   still claim standing was preserved. Not guessing.
+
+   The register output is above. Pick the one that is true:
+     · transient (network, node down)      -> fix the connection, re-run;
+     · you KNOW this DID is registered     -> GITLAWB_ASSUME_REGISTERED=1 bash "\$0"
+EOF
+    exit 4
+  fi
 fi
 
 # 4. mirror the CURRENT GitHub history into gitlawb (pulls master straight from GitHub). Idempotent.
