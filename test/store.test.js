@@ -128,6 +128,54 @@ t('age retention is THREAD-ATOMIC too — a live thread keeps its OLD seed, a st
   try { fs.rmSync(d3, { recursive: true, force: true }); } catch {}
 });
 
+/* ── ★ LE CACHE CHAUD EST PAR PROCESSUS, ET IL NE SE REVALIDAIT JAMAIS ───────────────────────────
+ * L'en-tete du cache l'annonce lui-meme: « two node processes on one LAWBOR_DB would desync ». Rien
+ * ne rattrapait cette desync: `_mut` ne bouge que sur NOS ecritures, donc un lecteur qui n'ecrit pas
+ * ne l'invalide jamais.
+ * ⚖️ LE CAS QUI COMPTE N'EST PAS L'AFFICHAGE PERIME, C'EST LA SUPPRESSION. deleteMsg existe ici
+ * « for a harassment victim »: retirer un corps deja stocke.
+ * MESURE DU 2026-08-16, deux instances de store sur un fichier:
+ *     P1 deleteMsg('M1') puis compact()  -> le corps QUITTE le disque (verifie absent du fichier)
+ *     P2 relit                           -> rendait encore le corps supprime, MOT POUR MOT
+ * Deux instances modelisent exactement la question posee — deux caches, un fichier. Elles ne
+ * modelisent PAS la concurrence OS, et ce n'est pas ce qui est mesure ici. */
+t('★ une suppression faite ailleurs ne laisse pas un second lecteur servir le corps', () => {
+  const f = path.join(dir, 'suppr.jsonl');
+  const P1 = createStore(f, f + '.control');
+  const P2 = createStore(f, f + '.control');
+  const m = { id: 'DEL-1', thread: 'td', from: A, to: B, body: 'corps a retirer', ts: 1 };
+  P1.record(m, { origin: 'human', dir: 'in' });
+
+  assert.ok(P2.all().some((x) => x.id === 'DEL-1'), 'TEMOIN: P2 doit d abord VOIR le message, sinon la suite ne mesure rien');
+
+  P1.deleteMsg('DEL-1');
+  P1.compact();
+  assert.ok(fs.readFileSync(f, 'utf8').indexOf('corps a retirer') < 0, 'TEMOIN: le corps doit avoir quitte le disque');
+
+  const chezP2 = P2.all().find((x) => x.id === 'DEL-1');
+  assert.ok(!chezP2, 'P2 sert encore le message supprime: la suppression n a pas eu lieu pour lui, et rien '
+    + 'ne l aurait rattrapee — un lecteur qui n ecrit pas ne bump jamais `_mut`.');
+});
+
+t('⚖️ TEMOIN — la garde de fraicheur ne DETRUIT pas le cache (nos propres ecrits ne re-amorcent pas)', () => {
+  /* ⛔ Le risque de ce correctif est d avoir « repare » en desactivant le cache. On compte donc les
+   * relectures COMPLETES du journal sur un cycle ecrire-puis-lire, qui est le pire cas pour la garde. */
+  const f = path.join(dir, 'cout.jsonl');
+  let complets = 0;
+  const vrai = fs.readFileSync;
+  fs.readFileSync = function (p, ...r) { if (String(p) === f) complets++; return vrai.call(fs, p, ...r); };
+  try {
+    const s = createStore(f, f + '.control');
+    for (let i = 0; i < 120; i++) {
+      s.record({ id: 'C' + i, thread: 'tc', from: A, to: B, body: 'x', ts: i }, { origin: 'human', dir: 'in' });
+      s.all();
+    }
+  } finally { fs.readFileSync = vrai; }
+  assert.ok(complets <= 3, complets + ' relectures completes pour 120 ecritures + 120 lectures — la garde '
+    + 're-amorce sur nos PROPRES ecrits, ce qui annule exactement ce que ce cache existe pour eviter.');
+});
+
+
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 console.log(`\n${pass} passed · ${fail} failed`);
 process.exit(fail ? 1 : 0);
