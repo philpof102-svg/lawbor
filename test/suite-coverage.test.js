@@ -34,11 +34,23 @@ const scripts = pkg.scripts || {};
  * lance. Ne regarder que `test` produirait de faux orphelins et userait la confiance dans la porte. */
 const toutesLesCommandes = Object.values(scripts).join(' && ');
 
+/**
+ * Le predicat qui decide ce qui COMPTE comme fichier de test, NOMME pour pouvoir etre eprouve.
+ *
+ * ⛔ Il est correct aujourd'hui — il accepte tout `.js`, pas seulement `*.test.js` — mais RIEN ne
+ * l'epinglait, et une propriete juste que personne n'asserte se perd en silence. Mesure du
+ * 2026-08-17 dans `mainstreet`: le meme predicat y filtrait sur `.test.js`, et un fichier depose
+ * sans ce suffixe etait STRICTEMENT INVISIBLE au portillon — 18 fichiers, 17 vus, 1 ignore.
+ *
+ * ⚠️ ET IL DOIT ETRE EPROUVE DIRECTEMENT, jamais a travers `surDisque`. Un cas qui injecte un nom
+ * fabrique dans la liste DEJA FILTREE contourne le filtre au lieu de le traverser: dans `mainstreet`
+ * ce cas-la restait VERT avec le mauvais filtre en place, et c'est une autre garde qui a attrape la
+ * regression. Un cas qui fabrique son entree en AVAL du point de controle teste autre chose.
+ */
+const estFichierDeTest = (f) => /\.(test\.)?(js|cjs|mjs)$/.test(f) && !f.startsWith('_');
+
 /** Les fichiers de test presents sur le disque. */
-const surDisque = fs.readdirSync(path.join(RACINE, 'test'))
-  .filter((f) => /\.(test\.)?(js|cjs|mjs)$/.test(f))
-  .filter((f) => !f.startsWith('_'))          // convention: `_helper.js` n'est pas un test
-  .sort();
+const surDisque = fs.readdirSync(path.join(RACINE, 'test')).filter(estFichierDeTest).sort();
 
 /**
  * ⛔ EXCLUSIONS DECLAREES. Un fichier ici doit porter une RAISON, et la raison est le point: elle
@@ -74,6 +86,17 @@ t('★ le script ne reference pas un fichier DISPARU', () => {
   const references = [...toutesLesCommandes.matchAll(/node (test\/[\w.-]+)/g)].map((m) => m[1]);
   const manquants = [...new Set(references)].filter((r) => !fs.existsSync(path.join(RACINE, r)));
   assert.deepStrictEqual(manquants, [], 'script(s) npm pointant sur un fichier absent: ' + manquants.join(', '));
+});
+
+t('★ LE PREDICAT ne depend pas du suffixe — eprouve DIRECTEMENT, pas a travers la liste', () => {
+  /* Cas POSITIFS: ce qui doit compter comme test, suffixe ou non. */
+  assert.ok(estFichierDeTest('gate-sans-suffixe.js'), 'un `.js` sans `.test.` doit compter');
+  assert.ok(estFichierDeTest('quelque-chose.test.js'), 'et le cas OPPOSE reste vrai');
+  assert.ok(estFichierDeTest('outil.cjs') && estFichierDeTest('outil.mjs'), 'cjs et mjs comptent aussi');
+  /* BORNES: ce qui ne doit PAS etre pris pour un test, sinon la porte accuserait des fixtures. */
+  assert.ok(!estFichierDeTest('_helper.js'), 'la convention `_` reste exclue');
+  assert.ok(!estFichierDeTest('donnees.json'), 'un fichier non-JS n est pas un test');
+  assert.ok(!estFichierDeTest('README.md'), 'ni un document');
 });
 
 t('★ la porte MORD — un orphelin simule est detecte', () => {
