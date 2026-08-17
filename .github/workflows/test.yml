@@ -1,0 +1,70 @@
+# LA SUITE TOURNE SUR CHAQUE POUSSÉE — pas seulement le jour d'une publication.
+#
+# ⚠️ POURQUOI CE FICHIER EXISTE, ET LA MESURE QUI LE JUSTIFIE. Jusqu'au 2026-08-17 ce dépôt n'avait
+# qu'un seul workflow, `publish.yml`. Il lance bien `npm test` avant de publier (ligne 44) — mais
+# c'était le SEUL chemin où la suite tournait ailleurs que sur le poste de l'auteur. Un commit qui
+# casse la suite n'aurait donc été vu qu'au moment de publier, c'est-à-dire au pire moment : quand
+# on a déjà décidé d'expédier.
+#
+# ⛔ ET CE CHEMIN UNIQUE EST ACTUELLEMENT FERMÉ. Mesure du 2026-08-17 : `lawbor-bot` est publié en
+# 0.2.1 et la version locale vaut AUSSI 0.2.1, avec 42 commits sur des chemins expédiés depuis. npm
+# refuse de republier une version existante, donc la publication ne peut pas partir — et avec elle,
+# la seule validation machine de ce dépôt. Le verrou de version ne bloquait pas seulement les
+# correctifs vers les installateurs : il désarmait aussi la CI. Voir `npm run test:publish`.
+#
+# `biii` a payé exactement ce défaut le 2026-07-28 (« douze commits poussés sans qu'AUCUNE validation
+# machine ne tourne ») et porte ce workflow depuis. Le savoir vivait dans son dépôt et n'a pas
+# traversé : c'est pour ça qu'il est réécrit ici plutôt que cité.
+#
+# Ce workflow ne demande AUCUN secret : il ne publie rien, il vérifie. Il peut donc tourner sur une
+# pull request venue d'un fork sans rien exposer.
+#
+# ⚖️ BORNE DITE : `package.json` déclare `engines: { node: ">=18" }` et ce workflow ne l'ÉPROUVE PAS
+# — il tourne sur une seule version. Un plancher annoncé que rien n'asserte est une promesse faite
+# aux installateurs sans preuve ; l'éprouver demande une matrice, et ce sera un changement délibéré,
+# pas un effet de bord de ce fichier.
+
+name: Tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# Une nouvelle poussée annule le run précédent de la même branche : inutile de payer deux fois pour
+# un état qui n'existe déjà plus.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # `npm ci` et non `npm install` : le lockfile EXISTE (vérifié), et `ci` installe exactement ce
+      # qu'il décrit au lieu de le réécrire. Ce dépôt déclare ZÉRO dépendance — la suite part donc
+      # d'un clone nu — mais l'étape reste utile : elle prouve que le lockfile est cohérent, ce
+      # qu'aucun test ne vérifie.
+      - name: Installer
+        run: npm ci --no-audit --no-fund
+
+      # Aucun `| grep`, aucun `| tee` ici, et c'est délibéré : un tube écrase le code de sortie —
+      # c'est le dernier maillon qui parle, jamais la commande. Ce piège a déjà masqué des échecs
+      # dans cette famille de dépôts.
+      - name: Suite complète
+        run: npm test
+
+      # Le point d'entrée que le manifeste du plugin lance chez les installateurs doit au moins
+      # PARSER. `node --check` ne démarre pas le serveur stdio (il ne rendrait jamais la main) : il
+      # prouve seulement que le fichier expédié n'est pas cassé syntaxiquement — une vérification
+      # faible, dite comme telle, et strictement meilleure que rien.
+      - name: Le point d'entrée MCP parse
+        run: node --check bin/lawbor-mcp.js
