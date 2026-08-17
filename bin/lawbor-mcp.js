@@ -27,7 +27,32 @@ const { createStore } = require('../lib/store');
 
 const SELF = process.env.LAWBOR_ADDR || '0x0000000000000000000000000000000000000000';
 const MAINSTREET_URL = (process.env.MAINSTREET_URL || 'https://avisradar-production.up.railway.app').replace(/\/$/, '');
-const MIN_SCORE = Number(process.env.LAWBOR_MIN_SCORE || 40);
+/* ⛔ UNE FAUTE DE FRAPPE DANS LE PLANCHER L'AFFAIBLISSAIT EN SILENCE, ET LA BANNIERE NE NOMMAIT
+ * AUCUN NOMBRE. `Number('8O' )` (la lettre O au lieu du zero) vaut NaN. Le relais est correctement
+ * defendu — `Number.isFinite(cfg.minScore) ? cfg.minScore : 40` (lib/relay.js:40) — donc il retombe
+ * a 40 et la comparaison `>= minScore` echoue FERMEE: aucun trou de securite. Mais l'operateur qui
+ * VOULAIT 80 obtient 40, c'est-a-dire un plancher PLUS FAIBLE que son intention, et personne ne le
+ * lui dit: la banniere de demarrage imprimait `min score NaN`.
+ *
+ * Mesure du 2026-08-16, quatre valeurs d'environnement:
+ *   absent -> banniere 40, plancher 40      "80" -> 80, 80
+ *   "8O"   -> banniere NaN, plancher 40     "abc" -> NaN, 40
+ * (Et `LAWBOR_MIN_SCORE=0` marche: "0" est une chaine NON VIDE, donc `||` ne la remplace pas —
+ * verifie, parce que c'est le seul moyen d'accepter tout le monde deliberement.)
+ *
+ * La decision etait juste, la DIVULGATION manquait. Ici on juge la valeur AU SOURCE, ou vit
+ * l'intention de l'operateur, et on DIT ce qui a ete retenu. Le clamp du relais reste — defense en
+ * profondeur, jamais remplacee par celle-ci. */
+const PLANCHER_DEFAUT = 40;
+const minScoreBrut = process.env.LAWBOR_MIN_SCORE;
+const minScoreLu = (minScoreBrut === undefined || minScoreBrut === '') ? PLANCHER_DEFAUT : Number(minScoreBrut);
+const minScoreIllisible = !Number.isFinite(minScoreLu);
+const MIN_SCORE = minScoreIllisible ? PLANCHER_DEFAUT : minScoreLu;
+if (minScoreIllisible) {
+  process.stderr.write('lawbor mcp: ⚠️ LAWBOR_MIN_SCORE=' + JSON.stringify(String(minScoreBrut)).slice(0, 40)
+    + ' n est pas un nombre lisible — plancher de reputation ramene a ' + PLANCHER_DEFAUT
+    + '. Si vous vouliez un plancher PLUS STRICT, il n est PAS applique.\n');
+}
 
 // peer routing table from env: "0xabc...=https://bot-a.example,0xdef...=https://bot-b.example"
 const peerUrls = new Map();
