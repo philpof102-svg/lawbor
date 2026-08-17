@@ -45,6 +45,40 @@ const t = (n, fn) => { try { fn(); pass++; console.log('  ✓ ' + n); } catch (e
 
 const posix = (p) => p.split(path.sep).join('/');
 const SCRIPT = posix(path.join(__dirname, '..', 'tools', 'publish-gitlawb.sh'));
+
+/* ⛔ LE BINAIRE `bash` SE CHOISIT PAR CAPACITE, PAS PAR NOM — mesure du 2026-08-17.
+ * Sur cette machine `bash` a cesse de resoudre vers Git Bash pour resoudre vers
+ * `C:\Windows\system32\bash.exe` (WSL). Ce gate est alors devenu ROUGE avec
+ * « /bin/bash: D:/tmp/.../driver.sh: No such file or directory » — un rouge qui accuse le code alors
+ * que la cause est l'environnement, et un rouge qui ment entraine a ignorer le rouge.
+ *
+ * Deux capacites sont requises, et elles se mesurent separement:
+ *   1. VOIR un chemin `D:/...` — WSL monte D: en /mnt/d, donc il ne le voit pas;
+ *   2. PORTER les variables passees par le lanceur — WSL n'herite d'AUCUNE variable Windows sans
+ *      WSLENV, et ce driver s'appuie sur l'environnement.
+ * On essaie donc `bash` du PATH, puis le bash livre AVEC git (deterministe: a cote de `git.exe`).
+ * Aucun ⇒ echec qui NOMME les deux mesures. Jamais un skip: cf. la note ci-dessous, une garde qui
+ * n'a pas tourne n'est pas une garde qui a dit oui.
+ *
+ * ⚠️ Piege de la sonde elle-meme: en POSITIONNEL (`bash -c 'test -e "$1"' _ <chemin>`) elle rend
+ * status 1 sur un fichier pourtant visible — les arguments apres `-c` ne survivent pas au
+ * reassemblage de la ligne de commande Windows. Forme INLINE obligatoire. */
+const voitScript = (b) => spawnSync(b, ['-c', "test -e '" + SCRIPT + "'"], { encoding: 'utf8' }).status === 0;
+const porteEnv = (b) => {
+  const r = spawnSync(b, ['-c', 'echo "$LAWBOR_SONDE_ENV"'],
+    { encoding: 'utf8', env: { ...process.env, LAWBOR_SONDE_ENV: 'porte' } });
+  return r.status === 0 && String(r.stdout).trim() === 'porte';
+};
+const CANDIDATS = ['bash'];
+{
+  const ou = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['git'], { encoding: 'utf8' });
+  const gitExe = ou.status === 0 ? String(ou.stdout).split(/\r?\n/).filter(Boolean)[0] : null;
+  if (gitExe) {
+    const racine = path.dirname(path.dirname(gitExe));
+    for (const rel of [['bin', 'bash.exe'], ['usr', 'bin', 'bash.exe']]) CANDIDATS.push(path.join(racine, ...rel));
+  }
+}
+const BASH = CANDIDATS.find((b) => voitScript(b) && porteEnv(b)) || 'bash';
 const temporaires = [];
 const jetable = (suffixe) => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'lawbor-gitlawb-' + suffixe + '-'));
@@ -101,7 +135,7 @@ function lancer({ avecIdentite, optIn }) {
   const driver = path.join(atelier, 'driver.sh');
   fs.writeFileSync(driver, DRIVER);
 
-  const r = spawnSync('bash', [posix(driver), posix(home), posix(journal), optIn ? '1' : '0', SCRIPT],
+  const r = spawnSync(BASH, [posix(driver), posix(home), posix(journal), optIn ? '1' : '0', SCRIPT],
     { encoding: 'utf8', timeout: 60000 });
   if (r.error) {
     // ⛔ Jamais "skip": une garde qui n a pas tourne n est pas une garde qui a dit oui.
