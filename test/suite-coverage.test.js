@@ -83,6 +83,51 @@ t('★ la porte MORD — un orphelin simule est detecte', () => {
     'la porte doit reperer un fichier de test que rien ne lance');
 });
 
+/* ⛔ « REFERENCE PAR UN SCRIPT » N'EST PAS « LANCE PAR LA SUITE », ET L'EN-TETE DE CE FICHIER PROMET
+ * LA SECONDE. `toutesLesCommandes` agrege TOUS les scripts npm — ce qui est juste pour ne pas
+ * fabriquer de faux orphelins — mais un fichier cable sur un script que personne n'invoque jamais
+ * (`test:publish`, `sim:*`) est compte « couvert » alors qu'il ne tourne a AUCUN commit ordinaire.
+ *
+ * Mesure du 2026-08-17: en ajoutant `test/publish-is-possible.js` cable sur `test:publish`, cette
+ * porte est restee verte — correctement selon sa definition, et pourtant le fichier ne tourne dans
+ * aucune suite. `biii` repond a la question plus stricte (il ne lit que `scripts.test`) au prix
+ * d'une liste d'exclusions justifiees. Aucune des deux conceptions n'est fausse; ce qui manquait
+ * ici, c'est de DIRE laquelle des deux couvertures on regarde.
+ *
+ * Ce cas separe donc les deux populations et exige que la seconde soit DECLAREE — un fichier qui ne
+ * tourne qu'a la demande est une decision, pas un effet de bord de nommage. */
+const CHAINE_TEST = scripts.test || '';
+const SUR_DEMANDE = {
+  'publish-is-possible.js':
+    'reseau (registre npm) — hors de `npm test` par dessein: une dependance reseau rend la suite '
+    + 'rouge pour des motifs qui ne sont pas le code. A lancer via `npm run test:publish` AVANT de '
+    + 'croire qu un correctif est distribue.',
+};
+
+t('★ chaque fichier lance SUR DEMANDE seulement est DECLARE comme tel', () => {
+  const surDemande = surDisque.filter((f) => !(f in EXCLUS)
+    && !CHAINE_TEST.includes('test/' + f) && toutesLesCommandes.includes('test/' + f));
+  const nonDeclares = surDemande.filter((f) => !(f in SUR_DEMANDE));
+  assert.deepStrictEqual(nonDeclares, [],
+    'fichier(s) cable(s) sur un script npm mais ABSENT(s) de `npm test` — ils ne tournent a aucun '
+    + 'commit ordinaire:\n       ' + nonDeclares.join(', ')
+    + '\n       Les mettre dans la chaine `test`, ou les declarer dans SUR_DEMANDE avec la raison.');
+  const fantomes = Object.keys(SUR_DEMANDE).filter((f) => !surDemande.includes(f));
+  assert.deepStrictEqual(fantomes, [],
+    'entree(s) SUR_DEMANDE qui ne correspondent plus a un fichier hors-suite: ' + fantomes.join(', '));
+});
+
+t('LES DEUX COUVERTURES sont distinctes — et le chiffre le dit', () => {
+  /* Sans ce cas, une future refonte pourrait aligner les deux populations et personne ne verrait que
+   * la porte a cesse de distinguer. On exige donc que la couverture SUITE soit un sous-ensemble
+   * STRICT ou EGAL de la couverture TOUS SCRIPTS, et que le calcul porte sur des ensembles reels. */
+  const parSuite = surDisque.filter((f) => CHAINE_TEST.includes('test/' + f));
+  const parTous = surDisque.filter((f) => toutesLesCommandes.includes('test/' + f));
+  assert.ok(parSuite.length > 0 && parTous.length > 0, 'succes vide: une des deux couvertures est nulle');
+  assert.ok(parSuite.length <= parTous.length, 'la suite ne peut pas couvrir plus que tous les scripts');
+  for (const f of parSuite) assert.ok(parTous.includes(f), 'incoherence sur ' + f);
+});
+
 t('aucune exclusion FANTOME — une entree morte masquerait un vrai orphelin', () => {
   const fantomes = Object.keys(EXCLUS).filter((f) => !surDisque.includes(f));
   assert.deepStrictEqual(fantomes, [], 'entree(s) de EXCLUS qui ne correspondent a aucun fichier: '
@@ -102,8 +147,11 @@ t('★ tout binaire expedie dans `files` est declare dans `bin`', () => {
     + nonDeclares.join(', ') + ' — ils partent chez tous les installateurs sans etre sur leur PATH.');
 });
 
+/* L'inventaire imprime les DEUX couvertures: un seul chiffre laisserait croire que « couvert » veut
+ * dire « tourne a chaque commit », ce qui est faux pour les gates hors-suite. */
 console.log('\n  inventaire: ' + surDisque.length + ' fichier(s) de test · '
-  + [...new Set([...toutesLesCommandes.matchAll(/node (test\/[\w.-]+)/g)].map((m) => m[1]))].length
-  + ' declare(s) · ' + Object.keys(EXCLUS).length + ' exclusion(s) declaree(s)');
+  + surDisque.filter((f) => (scripts.test || '').includes('test/' + f)).length + ' lance(s) par `npm test` · '
+  + Object.keys(SUR_DEMANDE).length + ' sur demande (declare(s)) · '
+  + Object.keys(EXCLUS).length + ' exclusion(s) declaree(s)');
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 if (fail) process.exitCode = 1;
