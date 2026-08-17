@@ -25,10 +25,37 @@ const path = require('path');
 
 const feedDir = () => process.env.LAWBOR_PREMIUM_DIR || path.join(__dirname, '..', 'data', 'premium');
 
-/** Read the operator's entries, newest first. Pure w.r.t. the directory; never fabricates. */
+/**
+ * Read the operator's entries, newest first. Pure w.r.t. the directory; never fabricates.
+ *
+ * ⛔ « DOSSIER ABSENT » ET « DOSSIER ILLISIBLE » NE SONT PAS LA MEME CHOSE, ET C'EST UN ABONNE
+ * PAYANT QUI LIT LA DIFFERENCE. Ce `catch` rendait `[]` pour les deux. Or le vide se raconte
+ * ensuite avec EMPTY_NOTE — « This node's operator has not published any premium entries yet » —
+ * qui est une AFFIRMATION SUR L'OPERATEUR. Mesure du 2026-08-16: un dossier absent (le fork neuf,
+ * legitime et documente) et un chemin illisible (droits, I/O, LAWBOR_PREMIUM_DIR mal pose)
+ * produisent le MEME `[]`, donc la MEME phrase — on accuse l'operateur de n'avoir rien publie
+ * alors que le noeud n'a pas su lire son propre dossier. Un abonne a 5 USDC/mois voit un flux vide
+ * ET une explication FAUSSE, sans le moindre signal.
+ *
+ * Seul `ENOENT` est un vide legitime. Tout le reste LEVE: une erreur bruyante vaut infiniment mieux
+ * qu'une phrase rassurante et fausse servie a quelqu'un qui paie.
+ *
+ * ⚖️ BORNE: `ENOTDIR` (un fichier a la place du dossier) est traite comme une PANNE, pas comme un
+ * vide — c'est une mauvaise configuration, jamais l'etat normal d'un fork neuf.
+ *
+ * Motif repere par une session voisine le MEME JOUR sur `outbox.js` du bus gitlawb (« ne traiter
+ * que ENOENT comme une file vide ») et par la garde `valider()` du committeur de `biii`. Meme
+ * famille, trois depots, trois surfaces.
+ */
 function entries(dir = feedDir()) {
   let files = [];
-  try { files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.md')); } catch { return []; }
+  try { files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.md')); }
+  catch (e) {
+    if (e && e.code === 'ENOENT') return [];   // aucun dossier: le fork neuf, par conception
+    throw new Error('premium feed directory is unreadable (' + (e && e.code ? e.code : 'unknown') + ' at '
+      + dir + ') — refusing to report an EMPTY feed, which would tell a paying subscriber that the '
+      + 'operator published nothing. This is OUR failure to read, not the operator\'s silence.');
+  }
   const out = [];
   for (const f of files) {
     const full = path.join(dir, f);

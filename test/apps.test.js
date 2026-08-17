@@ -265,6 +265,26 @@ const premApp = { name: 'vault', description: 'premium', premium: true, routes: 
     const html = await apps.http('GET', '/app/premium-feed/', { caller: PAYER });
     assert.ok(/text\/html/.test(html.contentType) && html.body.includes('Week 1'), 'members page renders the entry');
 
+    /* 3bis. ⛔ LE VIDE PAR PANNE N'EST PAS LE VIDE LEGITIME, et c'est un abonne PAYANT qui lit la
+     * difference. Le cas 2 ci-dessus couvre le vide honnete (dossier absent = fork neuf). Celui-ci
+     * couvre l'autre: un chemin ILLISIBLE rendait le meme `[]`, donc la meme phrase
+     * « the operator has not published any premium entries yet » — une AFFIRMATION SUR L'OPERATEUR
+     * produite par NOTRE incapacite a lire. Mesure du 2026-08-16: dossier absent et chemin illisible
+     * etaient indiscernables. Seul ENOENT est un vide; le reste doit LEVER. */
+    const cheminCasse = path.join(LAWBOR_TMP, 'premfeed-pas-un-dossier.txt');
+    fs.writeFileSync(cheminCasse, 'un FICHIER la ou le code attend un dossier');
+    assert.throws(() => feed._entries(cheminCasse), /unreadable/i,
+      'un dossier illisible doit LEVER: rendre [] ferait accuser l operateur de ne rien publier');
+    let accuse = null;
+    try { feed._entries(cheminCasse); } catch (e) { accuse = e.message; }
+    assert.ok(!/has not published/i.test(String(accuse)),
+      'et le refus ne doit surtout PAS reprendre la phrase qui accuse l operateur');
+    fs.rmSync(cheminCasse, { force: true });
+
+    // TEMOIN: le vide LEGITIME (dossier absent) reste un vide, pas une panne — sinon un fork neuf casserait.
+    assert.deepStrictEqual(feed._entries(path.join(LAWBOR_TMP, 'premfeed-jamais-cree')), [],
+      'un fork neuf sans dossier premium doit continuer a rendre un flux vide, sans erreur');
+
     // 4. the subscription expires on our clock → back to 402, content withheld
     now += 31 * 86400000;
     assert.equal((await apps.http('GET', '/app/premium-feed/latest', { caller: PAYER })).status, 402, 'expired sub is refused again');
