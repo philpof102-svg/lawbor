@@ -43,11 +43,35 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # ⛔ L'ETAT D'AVANT, CAPTURE AVANT D'AGIR — sans lui, la garde d'honnetete plus bas ne peut pas
+      # dire la verite. Mesure du 2026-08-17, dans l'etat verrouille du depot (0.2.1 publie le 21/07,
+      # version locale AUSSI 0.2.1): `npm publish` rend E403, `continue-on-error` l'avale, puis la
+      # garde demande `npm view lawbor-bot@0.2.1 version`, obtient « 0.2.1 » — parce que cette version
+      # existe depuis un mois — et PASSE. Le run sortait VERT en n'ayant RIEN publie.
+      #
+      # La garde verifiait une PRESENCE la ou l'exigence est une TRANSITION: elle ne distinguait pas
+      # « on vient de publier » de « ca existait deja ». C'est la meme faute que sonder l'EXISTENCE
+      # d'un outil quand ce qu'on exige est sa CAPACITE. On enregistre donc l'avant, et chaque branche
+      # dit ce qui s'est reellement passe.
+      - name: npm — cette version est-elle deja publiee ?
+        id: npmstate
+        run: |
+          V=$(node -p "require('./package.json').version")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if npm view "lawbor-bot@$V" version >/dev/null 2>&1; then
+            echo "deja publie sur npm: lawbor-bot@$V — l'etape publish sera sautee, le registre MCP tournera quand meme"
+            echo "already=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "absent de npm: lawbor-bot@$V — l'etape publish tournera"
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Plus de `continue-on-error`: la condition remplace l'avalage. Quand npm DOIT tourner et
+      # echoue, la release ne doit pas aboutir — sinon le registre annoncerait une version que npm ne
+      # sert pas. Quand npm n'a rien a faire, l'etape est sautee et le registre continue: c'est
+      # exactement ce que `continue-on-error` cherchait a obtenir, sans masquer les vrais echecs.
       - name: npm publish
-        if: ${{ inputs.dry_run != 'true' }}
-        # continue-on-error: if this exact version is already on npm (publish-over → E403) the MCP
-        # registry publish below must still run. The verify step next is what makes a REAL failure loud.
-        continue-on-error: true
+        if: ${{ inputs.dry_run != 'true' && steps.npmstate.outputs.already != 'true' }}
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -57,13 +81,31 @@ jobs:
       # v0.2.0 "success" was actually validating a LOCAL publish). This step makes the pipeline unable
       # to lie: either npm serves exactly this version (retrying through registry propagation lag,
       # which also 404'd the MCP step once), or the run fails naming the real cause.
+      # ⚠️ DEUX BRANCHES, PARCE QU'IL Y A DEUX MONDES, et les confondre est ce qui faisait mentir ce
+      # portillon. « Cette version existait DEJA » n'est pas « on vient de la publier »: le premier
+      # est une re-execution legitime (le registre MCP se rafraichit), le second est la vraie
+      # publication. Le journal doit dire lequel, sinon un run vert se lit « expedié » alors que rien
+      # n'a bouge chez les installateurs.
+      # ⚠️ La valeur passe par `env:`, jamais interpolee DANS le `run:`. Une expression `${{ }}` est
+      # substituee AVANT que bash ne voie la ligne: une valeur portant un guillemet casserait le
+      # script (ou pire). Ici elle vaut « true »/« false » et vient de notre propre etape, donc le
+      # risque est nul — mais c'est la forme recommandee, et aucun autre workflow de ces depots
+      # n'avait de precedent d'interpolation dans un shell. On ne cree pas le precedent risque.
       - name: Verify npm actually has this version
         if: ${{ inputs.dry_run != 'true' }}
+        env:
+          DEJA_PUBLIE: ${{ steps.npmstate.outputs.already }}
         run: |
           V=$(node -p "require('./package.json').version")
+          if [ "$DEJA_PUBLIE" = "true" ]; then
+            echo "::notice::lawbor-bot@$V etait DEJA sur npm avant ce run — RIEN n'a ete publie."
+            echo "Ce run rafraichit le registre MCP uniquement. Pour expedier du code aux"
+            echo "installateurs, monter la version dans package.json (voir npm run test:publish)."
+            exit 0
+          fi
           for i in $(seq 1 12); do
             GOT=$(npm view lawbor-bot@"$V" version 2>/dev/null || true)
-            if [ "$GOT" = "$V" ]; then echo "npm serves lawbor-bot@$V"; exit 0; fi
+            if [ "$GOT" = "$V" ]; then echo "npm serves lawbor-bot@$V (publie par ce run)"; exit 0; fi
             echo "npm does not serve $V yet (attempt $i/12) — waiting 10s"; sleep 10
           done
           echo "::error::lawbor-bot@$V never appeared on npm — the publish step failed silently (is the NPM_TOKEN secret set? see the header of this file)"; exit 1
