@@ -57,7 +57,8 @@
     "messaging-proof": "node sim/messaging-proof.js",
     "claims": "node claims.cjs",
     "register": "node erc8004-register.cjs",
-    "structure": "node structure.cjs"
+    "structure": "node structure.cjs",
+    "test:publish": "node test/publish-is-possible.js"
   },
   "keywords": [
     "mcp",
